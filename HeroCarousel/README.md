@@ -51,8 +51,12 @@ Each slide always reserves the hero surface size and shows a placeholder overlay
 - `ImageProvider`: optional async image resolver.
 - `ImageStretch`: defaults to `UniformToFill`.
 - `IsLoopingEnabled`: defaults to `true`.
+- `IsAutoAdvanceEnabled`: defaults to `false`.
+- `AutoAdvanceInterval`: defaults to `00:00:06`.
+- `PauseAutoAdvanceOnInteraction`: defaults to `true`.
 - `ShowNavigationButtons`: defaults to `true`.
-- `ShowPips`: defaults to `true`.
+- `ShowPips`: compatibility boolean, defaults to `true`.
+- `PipsVisibility`: WinUI visibility for the styled `PipsPager`, defaults to `Visible`.
 - `UseGlow`: defaults to `true`.
 - `UseColorWash`: defaults to `true`.
 - `UseSpotlight`: defaults to `true`.

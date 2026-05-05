@@ -13,6 +13,7 @@ using HeroCarousel.Shaders;
 using Microsoft.Graphics.Canvas.UI.Xaml;
 using Microsoft.UI;
 using Microsoft.UI.Composition;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
@@ -28,6 +29,8 @@ using Windows.Foundation;
 using Windows.System;
 using Windows.UI;
 using Microsoft.UI.Xaml.Automation.Peers;
+// this is neccesary !
+using DispatcherQueueTimer = Microsoft.UI.Dispatching.DispatcherQueueTimer;
 
 namespace HeroCarousel;
 
@@ -55,6 +58,9 @@ public sealed partial class HeroCarouselView : UserControl
     private const double ContentLayerParallaxFactor = 0.025;
     private const double TrackpadWheelDeltaScale = 0.28;
     private const double TouchDragThreshold = 8.0;
+    private const double PipSlotWidth = 18.0;
+    private const double PipIndicatorWidth = 18.0;
+    private static readonly TimeSpan DefaultAutoAdvanceInterval = TimeSpan.FromSeconds(6);
     private const int MaxWheelDiagnostics = 220;
     private const int DefaultImageCacheCapacity = 24;
 
@@ -100,6 +106,27 @@ public sealed partial class HeroCarouselView : UserControl
             typeof(HeroCarouselView),
             new PropertyMetadata(true, OnRebuildPropertyChanged));
 
+    public static readonly DependencyProperty IsAutoAdvanceEnabledProperty =
+        DependencyProperty.Register(
+            nameof(IsAutoAdvanceEnabled),
+            typeof(bool),
+            typeof(HeroCarouselView),
+            new PropertyMetadata(false, OnAutoAdvancePropertyChanged));
+
+    public static readonly DependencyProperty AutoAdvanceIntervalProperty =
+        DependencyProperty.Register(
+            nameof(AutoAdvanceInterval),
+            typeof(TimeSpan),
+            typeof(HeroCarouselView),
+            new PropertyMetadata(DefaultAutoAdvanceInterval, OnAutoAdvancePropertyChanged));
+
+    public static readonly DependencyProperty PauseAutoAdvanceOnInteractionProperty =
+        DependencyProperty.Register(
+            nameof(PauseAutoAdvanceOnInteraction),
+            typeof(bool),
+            typeof(HeroCarouselView),
+            new PropertyMetadata(true, OnAutoAdvancePropertyChanged));
+
     public static readonly DependencyProperty ShowNavigationButtonsProperty =
         DependencyProperty.Register(
             nameof(ShowNavigationButtons),
@@ -113,6 +140,13 @@ public sealed partial class HeroCarouselView : UserControl
             typeof(bool),
             typeof(HeroCarouselView),
             new PropertyMetadata(true, OnVisualOptionsPropertyChanged));
+
+    public static readonly DependencyProperty PipsVisibilityProperty =
+        DependencyProperty.Register(
+            nameof(PipsVisibility),
+            typeof(Visibility),
+            typeof(HeroCarouselView),
+            new PropertyMetadata(Visibility.Visible, OnVisualOptionsPropertyChanged));
 
     public static readonly DependencyProperty UseGlowProperty =
         DependencyProperty.Register(
@@ -176,6 +210,7 @@ public sealed partial class HeroCarouselView : UserControl
     private Compositor? _compositor;
     private INotifyCollectionChanged? _itemsSourceCollectionChanged;
     private CanvasControl? _activeGlow;
+    private DispatcherQueueTimer? _autoAdvanceTimer;
     private Color _glowColorA;
     private Color _glowColorB;
     private bool _isLoaded;
@@ -188,6 +223,7 @@ public sealed partial class HeroCarouselView : UserControl
     private bool _wheelSettleQueued;
     private bool _commitCurrentIndexOnSnapComplete;
     private bool _contentHighlightRendering;
+    private bool _isPointerOverStage;
     private int _currentIndex;
     private int _scrollDirection;
     private int _snapTargetIndex;
@@ -269,6 +305,24 @@ public sealed partial class HeroCarouselView : UserControl
         set => SetValue(IsLoopingEnabledProperty, value);
     }
 
+    public bool IsAutoAdvanceEnabled
+    {
+        get => (bool)GetValue(IsAutoAdvanceEnabledProperty);
+        set => SetValue(IsAutoAdvanceEnabledProperty, value);
+    }
+
+    public TimeSpan AutoAdvanceInterval
+    {
+        get => (TimeSpan)GetValue(AutoAdvanceIntervalProperty);
+        set => SetValue(AutoAdvanceIntervalProperty, value);
+    }
+
+    public bool PauseAutoAdvanceOnInteraction
+    {
+        get => (bool)GetValue(PauseAutoAdvanceOnInteractionProperty);
+        set => SetValue(PauseAutoAdvanceOnInteractionProperty, value);
+    }
+
     public bool ShowNavigationButtons
     {
         get => (bool)GetValue(ShowNavigationButtonsProperty);
@@ -279,6 +333,12 @@ public sealed partial class HeroCarouselView : UserControl
     {
         get => (bool)GetValue(ShowPipsProperty);
         set => SetValue(ShowPipsProperty, value);
+    }
+
+    public Visibility PipsVisibility
+    {
+        get => (Visibility)GetValue(PipsVisibilityProperty);
+        set => SetValue(PipsVisibilityProperty, value);
     }
 
     public bool UseGlow
@@ -338,11 +398,13 @@ public sealed partial class HeroCarouselView : UserControl
         _contactTracker.RefreshWindowTree();
         RefreshItems();
         RebuildSlides();
+        UpdateAutoAdvanceTimer();
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
         _isLoaded = false;
+        StopAutoAdvanceTimer();
         CancelSnapAnimation();
         CancelWheelSettle();
         CancelContentHighlight();
@@ -380,11 +442,17 @@ public sealed partial class HeroCarouselView : UserControl
         HeroCarouselView view = (HeroCarouselView)d;
 
         view.UpdateChromeVisibility();
+        view.UpdatePips();
 
         if (view._isLoaded)
         {
             view.ApplyGlow(view._currentIndex, true);
         }
+    }
+
+    private static void OnAutoAdvancePropertyChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        ((HeroCarouselView)d).UpdateAutoAdvanceTimer();
     }
 
     private static void OnImageCacheCapacityPropertyChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -511,6 +579,7 @@ public sealed partial class HeroCarouselView : UserControl
         {
             UpdateChromeVisibility();
             UpdatePips();
+            UpdateAutoAdvanceTimer();
             return;
         }
 
@@ -541,6 +610,7 @@ public sealed partial class HeroCarouselView : UserControl
         UpdateChromeVisibility();
         UpdatePips();
         SetTransforms(true);
+        UpdateAutoAdvanceTimer();
 
         if (animateRebuild)
         {
@@ -1652,6 +1722,8 @@ public sealed partial class HeroCarouselView : UserControl
             return;
         }
 
+        RestartAutoAdvanceTimer();
+
         int activeIndex = GetActiveIndex();
         int target = WrapLogicalIndex(requestedIndex);
 
@@ -1720,6 +1792,8 @@ public sealed partial class HeroCarouselView : UserControl
         double progress = -trackOffset / _stageWidth;
         double segmentProgress = progress - Math.Floor(progress);
         double counterPx = Math.Sin(segmentProgress * Math.PI) * TextParallaxAmplitude * _stageWidth;
+
+        UpdatePipIndicatorForTrackProgress(progress);
 
         for (int i = 0; i < _heroLayers.Count; i++)
         {
@@ -1887,18 +1961,28 @@ public sealed partial class HeroCarouselView : UserControl
 
     private void UpdatePips()
     {
+        int pageCount = Math.Max(1, SlideCount);
+        int selectedIndex = Math.Clamp(_currentIndex, 0, pageCount - 1);
+        Visibility pipsVisibility = GetEffectivePipsVisibility();
+
         _updatingPips = true;
 
         try
         {
-            SlidePips.NumberOfPages = Math.Max(1, SlideCount);
-            SlidePips.SelectedPageIndex = Math.Clamp(_currentIndex, 0, SlidePips.NumberOfPages - 1);
-            SlidePips.Visibility = ShowPips && SlideCount > 1 ? Visibility.Visible : Visibility.Collapsed;
+            SlidePips.NumberOfPages = pageCount;
+            SlidePips.SelectedPageIndex = selectedIndex;
         }
         finally
         {
             _updatingPips = false;
         }
+
+        PipsPresenter.Width = Math.Max(PipSlotWidth, pageCount * PipSlotWidth);
+        PipsPresenter.Visibility = pipsVisibility;
+        SlidePips.Visibility = pipsVisibility;
+        AnimatedSelectedPip.Visibility = pipsVisibility;
+        AnimatedSelectedPip.Opacity = pipsVisibility == Visibility.Visible ? 1 : 0;
+        UpdateAnimatedPipIndicator(selectedIndex, animate: false);
     }
 
     private void UpdateChromeVisibility()
@@ -1913,7 +1997,11 @@ public sealed partial class HeroCarouselView : UserControl
             NextButton.Opacity = 0;
         }
 
-        SlidePips.Visibility = ShowPips && SlideCount > 1 ? Visibility.Visible : Visibility.Collapsed;
+        Visibility pipsVisibility = GetEffectivePipsVisibility();
+        PipsPresenter.Visibility = pipsVisibility;
+        SlidePips.Visibility = pipsVisibility;
+        AnimatedSelectedPip.Visibility = pipsVisibility;
+        AnimatedSelectedPip.Opacity = pipsVisibility == Visibility.Visible ? 1 : 0;
         SpotlightCanvas.Visibility = UseSpotlight ? Visibility.Visible : Visibility.Collapsed;
 
         if (!UseSpotlight)
@@ -1927,6 +2015,189 @@ public sealed partial class HeroCarouselView : UserControl
             GlowCanvasA.Opacity = 0;
             GlowCanvasB.Opacity = 0;
         }
+    }
+
+    private Visibility GetEffectivePipsVisibility()
+    {
+        if (!ShowPips || SlideCount <= 1)
+        {
+            return Visibility.Collapsed;
+        }
+
+        return PipsVisibility;
+    }
+
+    private void UpdatePipIndicatorForTrackProgress(double trackProgress)
+    {
+        if (SlideCount <= 1 || GetEffectivePipsVisibility() != Visibility.Visible)
+        {
+            return;
+        }
+
+        double pipProgress = GetPipProgress(trackProgress);
+
+        UpdateAnimatedPipIndicator(pipProgress, animate: false);
+    }
+
+    private double GetPipProgress(double trackProgress)
+    {
+        if (SlideCount <= 1)
+        {
+            return 0;
+        }
+
+        if (!IsLooping)
+        {
+            return Math.Clamp(trackProgress, 0, SlideCount - 1);
+        }
+
+        double middleProgress = trackProgress - SlideCount;
+        double lastIndex = SlideCount - 1;
+
+        if (middleProgress < 0)
+        {
+            return Math.Clamp(-middleProgress * lastIndex, 0, lastIndex);
+        }
+
+        if (middleProgress > lastIndex)
+        {
+            double wrapProgress = Math.Clamp(middleProgress - lastIndex, 0, 1);
+
+            return (1 - wrapProgress) * lastIndex;
+        }
+
+        return middleProgress;
+    }
+
+    private void UpdateAnimatedPipIndicator(double selectedIndex, bool animate)
+    {
+        if (AnimatedSelectedPip.RenderTransform is not CompositeTransform transform)
+        {
+            transform = new CompositeTransform();
+            AnimatedSelectedPip.RenderTransform = transform;
+        }
+
+        (double x, double width) = GetPipIndicatorGeometry(selectedIndex);
+        AnimatedSelectedPip.Width = width;
+        transform.TranslateX = x;
+    }
+
+    private (double X, double Width) GetPipIndicatorGeometry(double pipProgress)
+    {
+        if (SlideCount <= 1)
+        {
+            return (0, PipIndicatorWidth);
+        }
+
+        double lastIndex = SlideCount - 1;
+        double progress = Math.Clamp(pipProgress, 0, lastIndex);
+        double lower = Math.Floor(progress);
+        double upper = Math.Ceiling(progress);
+        double fraction = progress - lower;
+
+        if (Math.Abs(fraction) < 0.0001 || Math.Abs(upper - lower) < 0.0001)
+        {
+            return (lower * PipSlotWidth, PipIndicatorWidth);
+        }
+
+        if (_scrollDirection < 0)
+        {
+            double reverseFraction = 1 - fraction;
+            double leading = upper - SmoothStep(0.0, 0.56, reverseFraction);
+            double trailing = upper + 1 - SmoothStep(0.38, 1.0, reverseFraction);
+            double x = leading * PipSlotWidth;
+            double width = Math.Max(PipIndicatorWidth, trailing * PipSlotWidth - x);
+
+            return (x, width);
+        }
+
+        double left = lower + SmoothStep(0.38, 1.0, fraction);
+        double right = lower + (PipIndicatorWidth / PipSlotWidth) + SmoothStep(0.0, 0.56, fraction);
+        double targetX = left * PipSlotWidth;
+        double targetWidth = Math.Max(PipIndicatorWidth, right * PipSlotWidth - targetX);
+
+        return (targetX, targetWidth);
+    }
+
+    private void UpdateAutoAdvanceTimer()
+    {
+        if (!_isLoaded || !IsAutoAdvanceEnabled || SlideCount <= 1)
+        {
+            StopAutoAdvanceTimer();
+            return;
+        }
+
+        TimeSpan interval = AutoAdvanceInterval <= TimeSpan.Zero
+            ? DefaultAutoAdvanceInterval
+            : AutoAdvanceInterval;
+
+        if (interval < TimeSpan.FromSeconds(1))
+        {
+            interval = TimeSpan.FromSeconds(1);
+        }
+
+        _autoAdvanceTimer ??= CreateAutoAdvanceTimer();
+        _autoAdvanceTimer.Stop();
+        _autoAdvanceTimer.Interval = interval;
+        _autoAdvanceTimer.Start();
+    }
+
+    private DispatcherQueueTimer CreateAutoAdvanceTimer()
+    {
+        DispatcherQueueTimer timer = DispatcherQueue.CreateTimer();
+        timer.IsRepeating = true;
+        timer.Tick += OnAutoAdvanceTimerTick;
+
+        return timer;
+    }
+
+    private void StopAutoAdvanceTimer()
+    {
+        if (_autoAdvanceTimer is null)
+        {
+            return;
+        }
+
+        _autoAdvanceTimer.Stop();
+        _autoAdvanceTimer.Tick -= OnAutoAdvanceTimerTick;
+        _autoAdvanceTimer = null;
+    }
+
+    private void RestartAutoAdvanceTimer()
+    {
+        if (_autoAdvanceTimer is null)
+        {
+            return;
+        }
+
+        _autoAdvanceTimer.Stop();
+        _autoAdvanceTimer.Start();
+    }
+
+    private void OnAutoAdvanceTimerTick(DispatcherQueueTimer sender, object args)
+    {
+        if (!_isLoaded || !IsAutoAdvanceEnabled || SlideCount <= 1)
+        {
+            StopAutoAdvanceTimer();
+            return;
+        }
+
+        if (PauseAutoAdvanceOnInteraction && IsAutoAdvancePausedByInteraction())
+        {
+            RestartAutoAdvanceTimer();
+            return;
+        }
+
+        GoTo(GetActiveIndex() + 1);
+    }
+
+    private bool IsAutoAdvancePausedByInteraction()
+    {
+        return _isPointerOverStage ||
+            _isWheeling ||
+            _isPointerDragging ||
+            _snapRendering ||
+            _contactTracker.HasActiveContact;
     }
 
     private void AnimateOpacity(UIElement element, double opacity, TimeSpan duration)
@@ -1949,6 +2220,8 @@ public sealed partial class HeroCarouselView : UserControl
 
     private void OnStagePointerEntered(object sender, PointerRoutedEventArgs e)
     {
+        _isPointerOverStage = true;
+
         if (UseSpotlight)
         {
             _spotlightOpacity = 1;
@@ -1965,6 +2238,9 @@ public sealed partial class HeroCarouselView : UserControl
 
     private void OnStagePointerExited(object sender, PointerRoutedEventArgs e)
     {
+        _isPointerOverStage = false;
+        RestartAutoAdvanceTimer();
+
         if (UseSpotlight)
         {
             _spotlightOpacity = 0;

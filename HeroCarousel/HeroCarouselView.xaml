@@ -8,9 +8,8 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     Background="#1D1D24"
     mc:Ignorable="d">
-
     <UserControl.Resources>
-        <Style x:Key="HeroCarouselNormalPipStyle" TargetType="Button">
+        <Style x:Key="HeroCarouselPipButtonStyle" TargetType="Button">
             <Setter Property="Width" Value="18" />
             <Setter Property="Height" Value="18" />
             <Setter Property="MinWidth" Value="0" />
@@ -35,153 +34,159 @@
                 </Setter.Value>
             </Setter>
         </Style>
-
-        <Style x:Key="HeroCarouselSelectedPipStyle" TargetType="Button">
-            <Setter Property="Width" Value="18" />
-            <Setter Property="Height" Value="18" />
-            <Setter Property="MinWidth" Value="0" />
-            <Setter Property="MinHeight" Value="0" />
-            <Setter Property="Padding" Value="0" />
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="BorderThickness" Value="0" />
-            <Setter Property="UseSystemFocusVisuals" Value="False" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Grid Background="Transparent">
-                            <Border
-                                Width="18"
-                                Height="6"
-                                HorizontalAlignment="Center"
-                                VerticalAlignment="Center"
-                                Background="White"
-                                CornerRadius="3" />
-                        </Grid>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
     </UserControl.Resources>
 
     <Grid Padding="32">
         <Grid
-            x:Name="StageWrap"
             MaxWidth="1100"
             HorizontalAlignment="Stretch"
-            VerticalAlignment="Center"
-            SizeChanged="OnStageWrapSizeChanged">
+            VerticalAlignment="Center">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
 
             <Grid
-                x:Name="GlowHost"
-                Margin="-75"
-                IsHitTestVisible="False">
-                <canvas:CanvasControl
-                    x:Name="GlowCanvasA"
-                    ClearColor="Transparent"
-                    HorizontalAlignment="Center"
-                    IsHitTestVisible="False"
-                    Opacity="0"
-                    VerticalAlignment="Center" />
-                <canvas:CanvasControl
-                    x:Name="GlowCanvasB"
-                    ClearColor="Transparent"
-                    HorizontalAlignment="Center"
-                    IsHitTestVisible="False"
-                    Opacity="0"
-                    VerticalAlignment="Center" />
+                x:Name="StageWrap"
+                Grid.Row="0"
+                HorizontalAlignment="Stretch"
+                SizeChanged="OnStageWrapSizeChanged">
+
+                <Grid
+                    x:Name="GlowHost"
+                    Margin="-75"
+                    IsHitTestVisible="False">
+                    <canvas:CanvasControl
+                        x:Name="GlowCanvasA"
+                        ClearColor="Transparent"
+                        HorizontalAlignment="Center"
+                        IsHitTestVisible="False"
+                        Opacity="0"
+                        VerticalAlignment="Center" />
+                    <canvas:CanvasControl
+                        x:Name="GlowCanvasB"
+                        ClearColor="Transparent"
+                        HorizontalAlignment="Center"
+                        IsHitTestVisible="False"
+                        Opacity="0"
+                        VerticalAlignment="Center" />
+                </Grid>
+
+                <Border
+                    x:Name="StageBorder"
+                    Background="#111111"
+                    CornerRadius="12">
+                    <Grid
+                        x:Name="StageRoot"
+                        Background="Transparent"
+                        KeyDown="OnStageRootKeyDown"
+                        PointerEntered="OnStagePointerEntered"
+                        PointerExited="OnStagePointerExited"
+                        PointerPressed="OnStagePointerPressed"
+                        PointerReleased="OnStagePointerReleased"
+                        PointerCanceled="OnStagePointerCanceled"
+                        PointerCaptureLost="OnStagePointerCaptureLost"
+                        PointerMoved="OnStagePointerMoved"
+                        PointerWheelChanged="OnStagePointerWheelChanged">
+
+                        <Grid
+                            x:Name="BgTrack"
+                            HorizontalAlignment="Left"
+                            VerticalAlignment="Stretch" />
+
+                        <Grid
+                            x:Name="ContentTrack"
+                            HorizontalAlignment="Left"
+                            VerticalAlignment="Stretch" />
+
+                        <canvas:CanvasControl
+                            x:Name="SpotlightCanvas"
+                            ClearColor="Transparent"
+                            IsHitTestVisible="False"
+                            Opacity="0" />
+                    </Grid>
+                </Border>
+
+                <Button
+                    x:Name="PrevButton"
+                    Width="36"
+                    Height="36"
+                    Margin="12,0,0,0"
+                    Padding="0"
+                    HorizontalAlignment="Left"
+                    VerticalAlignment="Center"
+                    AutomationProperties.AutomationId="HeroCarouselPreviousButton"
+                    Background="#8C141419"
+                    BorderBrush="#14FFFFFF"
+                    BorderThickness="1"
+                    Click="OnPreviousClicked"
+                    CornerRadius="18"
+                    Opacity="0">
+                    <FontIcon
+                        FontSize="12"
+                        Foreground="White"
+                        Glyph="&#xE76B;" />
+                </Button>
+
+                <Button
+                    x:Name="NextButton"
+                    Width="36"
+                    Height="36"
+                    Margin="0,0,12,0"
+                    Padding="0"
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Center"
+                    AutomationProperties.AutomationId="HeroCarouselNextButton"
+                    Background="#8C141419"
+                    BorderBrush="#14FFFFFF"
+                    BorderThickness="1"
+                    Click="OnNextClicked"
+                    CornerRadius="18"
+                    Opacity="0">
+                    <FontIcon
+                        FontSize="12"
+                        Foreground="White"
+                        Glyph="&#xE76C;" />
+                </Button>
             </Grid>
 
-            <Border
-                x:Name="StageBorder"
-                Background="#111111"
-                CornerRadius="12">
-                <Grid
-                    x:Name="StageRoot"
-                    Background="Transparent"
-                    KeyDown="OnStageRootKeyDown"
-                    PointerEntered="OnStagePointerEntered"
-                    PointerExited="OnStagePointerExited"
-                    PointerPressed="OnStagePointerPressed"
-                    PointerReleased="OnStagePointerReleased"
-                    PointerCanceled="OnStagePointerCanceled"
-                    PointerCaptureLost="OnStagePointerCaptureLost"
-                    PointerMoved="OnStagePointerMoved"
-                    PointerWheelChanged="OnStagePointerWheelChanged">
-
-                    <Grid
-                        x:Name="BgTrack"
-                        HorizontalAlignment="Left"
-                        VerticalAlignment="Stretch" />
-
-                    <Grid
-                        x:Name="ContentTrack"
-                        HorizontalAlignment="Left"
-                        VerticalAlignment="Stretch" />
-
-                    <canvas:CanvasControl
-                        x:Name="SpotlightCanvas"
-                        ClearColor="Transparent"
-                        IsHitTestVisible="False"
-                        Opacity="0" />
-                </Grid>
-            </Border>
-
-            <Button
-                x:Name="PrevButton"
-                Width="36"
-                Height="36"
-                Margin="12,0,0,0"
-                Padding="0"
-                HorizontalAlignment="Left"
-                VerticalAlignment="Center"
-                AutomationProperties.AutomationId="HeroCarouselPreviousButton"
-                Background="#8C141419"
-                BorderBrush="#14FFFFFF"
-                BorderThickness="1"
-                Click="OnPreviousClicked"
-                CornerRadius="18"
-                Opacity="0">
-                <FontIcon
-                    FontSize="12"
-                    Foreground="White"
-                    Glyph="&#xE76B;" />
-            </Button>
-
-            <Button
-                x:Name="NextButton"
-                Width="36"
-                Height="36"
-                Margin="0,0,12,0"
-                Padding="0"
-                HorizontalAlignment="Right"
-                VerticalAlignment="Center"
-                AutomationProperties.AutomationId="HeroCarouselNextButton"
-                Background="#8C141419"
-                BorderBrush="#14FFFFFF"
-                BorderThickness="1"
-                Click="OnNextClicked"
-                CornerRadius="18"
-                Opacity="0">
-                <FontIcon
-                    FontSize="12"
-                    Foreground="White"
-                    Glyph="&#xE76C;" />
-            </Button>
-
-            <PipsPager
-                x:Name="SlidePips"
-                Margin="0,0,0,12"
+            <Grid
+                x:Name="PipsPresenter"
+                Grid.Row="1"
+                Height="18"
+                Margin="0,14,0,0"
                 HorizontalAlignment="Center"
-                VerticalAlignment="Bottom"
-                MaxVisiblePips="12"
-                NormalPipStyle="{StaticResource HeroCarouselNormalPipStyle}"
-                NumberOfPages="1"
-                Orientation="Horizontal"
-                PreviousButtonVisibility="Collapsed"
-                NextButtonVisibility="Collapsed"
-                SelectedIndexChanged="OnPipsPagerSelectedIndexChanged"
-                SelectedPageIndex="0"
-                SelectedPipStyle="{StaticResource HeroCarouselSelectedPipStyle}" />
+                VerticalAlignment="Top">
+                <PipsPager
+                    x:Name="SlidePips"
+                    HorizontalAlignment="Left"
+                    VerticalAlignment="Center"
+                    MaxVisiblePips="12"
+                    NormalPipStyle="{StaticResource HeroCarouselPipButtonStyle}"
+                    NumberOfPages="1"
+                    Orientation="Horizontal"
+                    PreviousButtonVisibility="Collapsed"
+                    NextButtonVisibility="Collapsed"
+                    SelectedIndexChanged="OnPipsPagerSelectedIndexChanged"
+                    SelectedPageIndex="0"
+                    SelectedPipStyle="{StaticResource HeroCarouselPipButtonStyle}" />
+
+                <Border
+                    x:Name="AnimatedSelectedPip"
+                    Width="18"
+                    Height="6"
+                    HorizontalAlignment="Left"
+                    VerticalAlignment="Center"
+                    Background="White"
+                    CornerRadius="3"
+                    IsHitTestVisible="False"
+                    Opacity="0"
+                    RenderTransformOrigin="0.5,0.5">
+                    <Border.RenderTransform>
+                        <CompositeTransform />
+                    </Border.RenderTransform>
+                </Border>
+            </Grid>
         </Grid>
     </Grid>
 </UserControl>

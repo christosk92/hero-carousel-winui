@@ -14,6 +14,9 @@
         folder and is exposed as the HeroCarouselView UserControl.
     -->
     <Grid>
-        <hc:HeroCarouselView x:Name="HeroCarousel" />
+        <hc:HeroCarouselView
+            x:Name="HeroCarousel"
+            AutoAdvanceInterval="0:0:6"
+            IsAutoAdvanceEnabled="True" />
     </Grid>
 </Page>
