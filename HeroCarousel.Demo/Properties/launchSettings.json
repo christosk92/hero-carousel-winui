@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "HeroCarousel.Demo (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "HeroCarousel.Demo (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}
