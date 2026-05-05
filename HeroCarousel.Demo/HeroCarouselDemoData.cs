@@ -1,9 +1,10 @@
 using System;
 using System.Collections.Generic;
+using HeroCarousel;
 using Microsoft.Windows.ApplicationModel.Resources;
 using Windows.UI;
 
-namespace HeroCarousel;
+namespace HeroCarousel.Demo;
 
 internal static class HeroCarouselDemoData
 {

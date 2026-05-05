@@ -14,6 +14,6 @@
         folder and is exposed as the HeroCarouselView UserControl.
     -->
     <Grid>
-        <hc:HeroCarouselView />
+        <hc:HeroCarouselView x:Name="HeroCarousel" />
     </Grid>
 </Page>

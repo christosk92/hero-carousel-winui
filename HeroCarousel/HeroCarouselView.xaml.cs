@@ -1,10 +1,12 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.Diagnostics;
 using System.Globalization;
 using System.Numerics;
+using System.Threading;
 using System.Threading.Tasks;
 using ComputeSharp.D2D1.WinUI;
 using HeroCarousel.Shaders;
@@ -54,6 +56,105 @@ public sealed partial class HeroCarouselView : UserControl
     private const double TrackpadWheelDeltaScale = 0.28;
     private const double TouchDragThreshold = 8.0;
     private const int MaxWheelDiagnostics = 220;
+    private const int DefaultImageCacheCapacity = 24;
+
+    public static readonly DependencyProperty ItemsSourceProperty =
+        DependencyProperty.Register(
+            nameof(ItemsSource),
+            typeof(IEnumerable),
+            typeof(HeroCarouselView),
+            new PropertyMetadata(null, OnItemsSourcePropertyChanged));
+
+    public static readonly DependencyProperty ContentTemplateProperty =
+        DependencyProperty.Register(
+            nameof(ContentTemplate),
+            typeof(DataTemplate),
+            typeof(HeroCarouselView),
+            new PropertyMetadata(null, OnRebuildPropertyChanged));
+
+    public static readonly DependencyProperty PlaceholderTemplateProperty =
+        DependencyProperty.Register(
+            nameof(PlaceholderTemplate),
+            typeof(DataTemplate),
+            typeof(HeroCarouselView),
+            new PropertyMetadata(null, OnRebuildPropertyChanged));
+
+    public static readonly DependencyProperty ImageProviderProperty =
+        DependencyProperty.Register(
+            nameof(ImageProvider),
+            typeof(IHeroCarouselImageProvider),
+            typeof(HeroCarouselView),
+            new PropertyMetadata(null, OnRebuildPropertyChanged));
+
+    public static readonly DependencyProperty ImageStretchProperty =
+        DependencyProperty.Register(
+            nameof(ImageStretch),
+            typeof(Stretch),
+            typeof(HeroCarouselView),
+            new PropertyMetadata(Stretch.UniformToFill, OnRebuildPropertyChanged));
+
+    public static readonly DependencyProperty IsLoopingEnabledProperty =
+        DependencyProperty.Register(
+            nameof(IsLoopingEnabled),
+            typeof(bool),
+            typeof(HeroCarouselView),
+            new PropertyMetadata(true, OnRebuildPropertyChanged));
+
+    public static readonly DependencyProperty ShowNavigationButtonsProperty =
+        DependencyProperty.Register(
+            nameof(ShowNavigationButtons),
+            typeof(bool),
+            typeof(HeroCarouselView),
+            new PropertyMetadata(true, OnVisualOptionsPropertyChanged));
+
+    public static readonly DependencyProperty ShowPipsProperty =
+        DependencyProperty.Register(
+            nameof(ShowPips),
+            typeof(bool),
+            typeof(HeroCarouselView),
+            new PropertyMetadata(true, OnVisualOptionsPropertyChanged));
+
+    public static readonly DependencyProperty UseGlowProperty =
+        DependencyProperty.Register(
+            nameof(UseGlow),
+            typeof(bool),
+            typeof(HeroCarouselView),
+            new PropertyMetadata(true, OnVisualOptionsPropertyChanged));
+
+    public static readonly DependencyProperty UseColorWashProperty =
+        DependencyProperty.Register(
+            nameof(UseColorWash),
+            typeof(bool),
+            typeof(HeroCarouselView),
+            new PropertyMetadata(true, OnRebuildPropertyChanged));
+
+    public static readonly DependencyProperty UseSpotlightProperty =
+        DependencyProperty.Register(
+            nameof(UseSpotlight),
+            typeof(bool),
+            typeof(HeroCarouselView),
+            new PropertyMetadata(true, OnVisualOptionsPropertyChanged));
+
+    public static readonly DependencyProperty UseShimmerPlaceholderProperty =
+        DependencyProperty.Register(
+            nameof(UseShimmerPlaceholder),
+            typeof(bool),
+            typeof(HeroCarouselView),
+            new PropertyMetadata(true, OnRebuildPropertyChanged));
+
+    public static readonly DependencyProperty UseButtonRevealProperty =
+        DependencyProperty.Register(
+            nameof(UseButtonReveal),
+            typeof(bool),
+            typeof(HeroCarouselView),
+            new PropertyMetadata(true, OnRebuildPropertyChanged));
+
+    public static readonly DependencyProperty ImageCacheCapacityProperty =
+        DependencyProperty.Register(
+            nameof(ImageCacheCapacity),
+            typeof(int),
+            typeof(HeroCarouselView),
+            new PropertyMetadata(DefaultImageCacheCapacity, OnImageCacheCapacityPropertyChanged));
 
     private readonly ResourceLoader _resources = new();
     private readonly DirectManipulationContactTracker _contactTracker = DirectManipulationContactTracker.Shared;
@@ -64,13 +165,16 @@ public sealed partial class HeroCarouselView : UserControl
     private readonly List<Visual> _heroLayerVisuals = [];
     private readonly List<LayerVisualState> _contentCardVisuals = [];
     private readonly List<ContentCardLayerVisuals> _contentCardLayerVisuals = [];
-    private readonly Dictionary<Uri, BitmapImage> _imageCache = [];
-    private readonly Dictionary<Uri, List<PendingHeroImageReveal>> _pendingImageReveals = [];
-    private readonly HashSet<Uri> _loadedImageUris = [];
+    private readonly List<object?> _items = [];
+    private readonly Dictionary<object, ImageSource> _imageCache = [];
+    private readonly Queue<object> _imageCacheOrder = [];
+    private readonly Dictionary<Image, FrameworkElement> _imagePlaceholders = [];
+    private readonly Dictionary<Image, CancellationTokenSource> _imageLoadTokens = [];
 
     private Visual? _backgroundTrackVisual;
     private Visual? _contentTrackVisual;
     private Compositor? _compositor;
+    private INotifyCollectionChanged? _itemsSourceCollectionChanged;
     private CanvasControl? _activeGlow;
     private Color _glowColorA;
     private Color _glowColorB;
@@ -129,6 +233,90 @@ public sealed partial class HeroCarouselView : UserControl
 
     public ObservableCollection<HeroCarouselSlide> Slides { get; } = [];
 
+    public IEnumerable? ItemsSource
+    {
+        get => (IEnumerable?)GetValue(ItemsSourceProperty);
+        set => SetValue(ItemsSourceProperty, value);
+    }
+
+    public DataTemplate? ContentTemplate
+    {
+        get => (DataTemplate?)GetValue(ContentTemplateProperty);
+        set => SetValue(ContentTemplateProperty, value);
+    }
+
+    public DataTemplate? PlaceholderTemplate
+    {
+        get => (DataTemplate?)GetValue(PlaceholderTemplateProperty);
+        set => SetValue(PlaceholderTemplateProperty, value);
+    }
+
+    public IHeroCarouselImageProvider ImageProvider
+    {
+        get => (IHeroCarouselImageProvider?)GetValue(ImageProviderProperty) ?? DefaultHeroCarouselImageProvider.Instance;
+        set => SetValue(ImageProviderProperty, value);
+    }
+
+    public Stretch ImageStretch
+    {
+        get => (Stretch)GetValue(ImageStretchProperty);
+        set => SetValue(ImageStretchProperty, value);
+    }
+
+    public bool IsLoopingEnabled
+    {
+        get => (bool)GetValue(IsLoopingEnabledProperty);
+        set => SetValue(IsLoopingEnabledProperty, value);
+    }
+
+    public bool ShowNavigationButtons
+    {
+        get => (bool)GetValue(ShowNavigationButtonsProperty);
+        set => SetValue(ShowNavigationButtonsProperty, value);
+    }
+
+    public bool ShowPips
+    {
+        get => (bool)GetValue(ShowPipsProperty);
+        set => SetValue(ShowPipsProperty, value);
+    }
+
+    public bool UseGlow
+    {
+        get => (bool)GetValue(UseGlowProperty);
+        set => SetValue(UseGlowProperty, value);
+    }
+
+    public bool UseColorWash
+    {
+        get => (bool)GetValue(UseColorWashProperty);
+        set => SetValue(UseColorWashProperty, value);
+    }
+
+    public bool UseSpotlight
+    {
+        get => (bool)GetValue(UseSpotlightProperty);
+        set => SetValue(UseSpotlightProperty, value);
+    }
+
+    public bool UseShimmerPlaceholder
+    {
+        get => (bool)GetValue(UseShimmerPlaceholderProperty);
+        set => SetValue(UseShimmerPlaceholderProperty, value);
+    }
+
+    public bool UseButtonReveal
+    {
+        get => (bool)GetValue(UseButtonRevealProperty);
+        set => SetValue(UseButtonRevealProperty, value);
+    }
+
+    public int ImageCacheCapacity
+    {
+        get => (int)GetValue(ImageCacheCapacityProperty);
+        set => SetValue(ImageCacheCapacityProperty, value);
+    }
+
     public int CurrentIndex
     {
         get => _currentIndex;
@@ -137,29 +325,18 @@ public sealed partial class HeroCarouselView : UserControl
 
     public event EventHandler<int>? CurrentIndexChanged;
 
-    private int SlideCount => Slides.Count;
+    private int SlideCount => _items.Count;
 
-    private bool IsLooping => SlideCount > 1;
+    private bool IsLooping => IsLoopingEnabled && SlideCount > 1;
 
     private int TrackItemCount => IsLooping ? SlideCount * 3 : SlideCount;
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         _isLoaded = true;
+        EnsureItemsSourceSubscription();
         _contactTracker.RefreshWindowTree();
-
-        if (Slides.Count == 0)
-        {
-            _isRebuilding = true;
-
-            foreach (HeroCarouselSlide slide in HeroCarouselDemoData.CreateSlides(_resources))
-            {
-                Slides.Add(slide);
-            }
-
-            _isRebuilding = false;
-        }
-
+        RefreshItems();
         RebuildSlides();
     }
 
@@ -169,10 +346,64 @@ public sealed partial class HeroCarouselView : UserControl
         CancelSnapAnimation();
         CancelWheelSettle();
         CancelContentHighlight();
+        CleanupImageLoadState();
+        ClearImageCache();
+        ClearItemsSourceSubscription();
         _contactTracker.Reset();
     }
 
     private void OnSlidesCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (_isLoaded && !_isRebuilding && ItemsSource is null)
+        {
+            RebuildSlides();
+        }
+    }
+
+    private static void OnItemsSourcePropertyChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        ((HeroCarouselView)d).OnItemsSourceChanged(e.NewValue as INotifyCollectionChanged);
+    }
+
+    private static void OnRebuildPropertyChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        HeroCarouselView view = (HeroCarouselView)d;
+
+        if (view._isLoaded && !view._isRebuilding)
+        {
+            view.RebuildSlides();
+        }
+    }
+
+    private static void OnVisualOptionsPropertyChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        HeroCarouselView view = (HeroCarouselView)d;
+
+        view.UpdateChromeVisibility();
+
+        if (view._isLoaded)
+        {
+            view.ApplyGlow(view._currentIndex, true);
+        }
+    }
+
+    private static void OnImageCacheCapacityPropertyChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        ((HeroCarouselView)d).TrimImageCache();
+    }
+
+    private void OnItemsSourceChanged(INotifyCollectionChanged? newSource)
+    {
+        ClearItemsSourceSubscription();
+        SetItemsSourceSubscription(newSource);
+
+        if (_isLoaded && !_isRebuilding)
+        {
+            RebuildSlides();
+        }
+    }
+
+    private void OnItemsSourceCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
         if (_isLoaded && !_isRebuilding)
         {
@@ -180,8 +411,90 @@ public sealed partial class HeroCarouselView : UserControl
         }
     }
 
+    private void EnsureItemsSourceSubscription()
+    {
+        if (_itemsSourceCollectionChanged is null && ItemsSource is INotifyCollectionChanged notifyCollectionChanged)
+        {
+            SetItemsSourceSubscription(notifyCollectionChanged);
+        }
+    }
+
+    private void SetItemsSourceSubscription(INotifyCollectionChanged? source)
+    {
+        _itemsSourceCollectionChanged = source;
+
+        if (_itemsSourceCollectionChanged is not null)
+        {
+            _itemsSourceCollectionChanged.CollectionChanged += OnItemsSourceCollectionChanged;
+        }
+    }
+
+    private void ClearItemsSourceSubscription()
+    {
+        if (_itemsSourceCollectionChanged is not null)
+        {
+            _itemsSourceCollectionChanged.CollectionChanged -= OnItemsSourceCollectionChanged;
+            _itemsSourceCollectionChanged = null;
+        }
+    }
+
+    private void RefreshItems()
+    {
+        _items.Clear();
+
+        if (ItemsSource is IEnumerable source)
+        {
+            foreach (object? item in source)
+            {
+                _items.Add(item);
+            }
+
+            return;
+        }
+
+        foreach (HeroCarouselSlide slide in Slides)
+        {
+            _items.Add(slide);
+        }
+    }
+
+    private object? GetItem(int index)
+    {
+        return _items[index];
+    }
+
+    private HeroCarouselSlide GetSlide(int index)
+    {
+        return ResolveSlide(GetItem(index));
+    }
+
+    private static HeroCarouselSlide ResolveSlide(object? item)
+    {
+        if (item is HeroCarouselSlide slide)
+        {
+            return slide;
+        }
+
+        return new HeroCarouselSlide
+        {
+            Image = item,
+            Title = item?.ToString() ?? string.Empty,
+            UseScrim = true,
+        };
+    }
+
     private void RebuildSlides()
     {
+        bool animateRebuild = _isLoaded && BgTrack.Children.Count > 0;
+
+        if (animateRebuild)
+        {
+            BgTrack.Opacity = 0;
+            ContentTrack.Opacity = 0;
+        }
+
+        CleanupImageLoadState();
+        RefreshItems();
         BgTrack.Children.Clear();
         BgTrack.ColumnDefinitions.Clear();
         ContentTrack.Children.Clear();
@@ -193,10 +506,11 @@ public sealed partial class HeroCarouselView : UserControl
         _heroLayerVisuals.Clear();
         _contentCardVisuals.Clear();
         _contentCardLayerVisuals.Clear();
-        _pendingImageReveals.Clear();
 
         if (SlideCount == 0)
         {
+            UpdateChromeVisibility();
+            UpdatePips();
             return;
         }
 
@@ -208,12 +522,14 @@ public sealed partial class HeroCarouselView : UserControl
             ContentTrack.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
             int slideIndex = GetLogicalIndexForTrackIndex(i);
-            FrameworkElement backgroundSlide = CreateBackgroundSlide(Slides[slideIndex]);
+            object? item = GetItem(slideIndex);
+            HeroCarouselSlide slide = ResolveSlide(item);
+            FrameworkElement backgroundSlide = CreateBackgroundSlide(item, slide);
             Grid.SetColumn(backgroundSlide, i);
             BgTrack.Children.Add(backgroundSlide);
             _backgroundSlides.Add(backgroundSlide);
 
-            Grid contentSlide = CreateContentSlide(Slides[slideIndex], i);
+            Grid contentSlide = CreateContentSlide(item, slide, i);
             Grid.SetColumn(contentSlide, i);
             ContentTrack.Children.Add(contentSlide);
 
@@ -222,11 +538,23 @@ public sealed partial class HeroCarouselView : UserControl
         UpdateLayoutForStageSize();
         CacheCompositionVisuals();
         ApplyGlow(_currentIndex, true);
+        UpdateChromeVisibility();
         UpdatePips();
         SetTransforms(true);
+
+        if (animateRebuild)
+        {
+            FadeElement(BgTrack, 1, 220);
+            FadeElement(ContentTrack, 1, 220);
+        }
+        else
+        {
+            BgTrack.Opacity = 1;
+            ContentTrack.Opacity = 1;
+        }
     }
 
-    private FrameworkElement CreateBackgroundSlide(HeroCarouselSlide slide)
+    private FrameworkElement CreateBackgroundSlide(object? item, HeroCarouselSlide slide)
     {
         Grid slideRoot = new()
         {
@@ -242,45 +570,22 @@ public sealed partial class HeroCarouselView : UserControl
             RenderTransformOrigin = new Point(0.5, 0.5),
         };
 
-        BitmapImage bitmap = GetOrCreateHeroBitmap(slide.ImageUri);
-        bool imageAlreadyLoaded = IsHeroImageLoaded(slide.ImageUri, bitmap);
-
         Image image = new()
         {
-            Source = bitmap,
-            Opacity = imageAlreadyLoaded ? 1 : 0,
-            Stretch = Stretch.UniformToFill,
+            Opacity = 0,
+            Stretch = ImageStretch,
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalAlignment = VerticalAlignment.Stretch,
         };
 
-        Grid shimmer = CreateImageShimmer(slide);
-        shimmer.Opacity = imageAlreadyLoaded ? 0 : 1;
-        shimmer.Visibility = imageAlreadyLoaded ? Visibility.Collapsed : Visibility.Visible;
+        FrameworkElement placeholder = CreateImagePlaceholder(item, slide);
 
         AutomationProperties.SetAccessibilityView(image, AccessibilityView.Raw);
-        AutomationProperties.SetAccessibilityView(shimmer, AccessibilityView.Raw);
+        AutomationProperties.SetAccessibilityView(placeholder, AccessibilityView.Raw);
 
         hero.Children.Add(image);
-        hero.Children.Add(shimmer);
-
-        if (imageAlreadyLoaded)
-        {
-            StopImageShimmer(shimmer);
-        }
-        else
-        {
-            RegisterPendingImageReveal(slide.ImageUri, image, shimmer);
-
-            if (IsHeroImageLoaded(slide.ImageUri, bitmap) &&
-                _pendingImageReveals.Remove(slide.ImageUri, out List<PendingHeroImageReveal>? pending))
-            {
-                foreach (PendingHeroImageReveal reveal in pending)
-                {
-                    RevealLoadedHeroImage(reveal.Image, reveal.Shimmer, false);
-                }
-            }
-        }
+        hero.Children.Add(placeholder);
+        BeginHeroImageLoad(item, slide, image, placeholder);
 
         slideRoot.Children.Add(hero);
 
@@ -289,52 +594,94 @@ public sealed partial class HeroCarouselView : UserControl
             slideRoot.Children.Add(CreateScrim());
         }
 
-        slideRoot.Children.Add(CreateColorWash(slide));
+        if (UseColorWash)
+        {
+            slideRoot.Children.Add(CreateColorWash(slide));
+        }
 
         _heroLayers.Add(hero);
 
         return slideRoot;
     }
 
-    private BitmapImage GetOrCreateHeroBitmap(Uri uri)
+    private FrameworkElement CreateImagePlaceholder(object? item, HeroCarouselSlide slide)
     {
-        if (_imageCache.TryGetValue(uri, out BitmapImage? cached))
+        if (PlaceholderTemplate is not null)
         {
-            return cached;
+            return new ContentControl
+            {
+                Content = item,
+                ContentTemplate = PlaceholderTemplate,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch,
+                IsHitTestVisible = false,
+            };
         }
 
-        BitmapImage bitmap = new();
-        bitmap.ImageOpened += (_, _) => OnHeroBitmapOpened(uri, bitmap);
-        bitmap.ImageFailed += (_, e) => OnHeroBitmapFailed(uri, e.ErrorMessage);
-        _imageCache[uri] = bitmap;
-        bitmap.UriSource = uri;
-
-        return bitmap;
-    }
-
-    private bool IsHeroImageLoaded(Uri uri, BitmapImage bitmap)
-    {
-        return _loadedImageUris.Contains(uri) || bitmap.PixelWidth > 0 || bitmap.PixelHeight > 0;
-    }
-
-    private void RegisterPendingImageReveal(Uri uri, Image image, FrameworkElement shimmer)
-    {
-        if (!_pendingImageReveals.TryGetValue(uri, out List<PendingHeroImageReveal>? pending))
+        if (UseShimmerPlaceholder)
         {
-            pending = [];
-            _pendingImageReveals[uri] = pending;
+            return CreateImageShimmer(slide);
         }
 
-        pending.Add(new PendingHeroImageReveal(image, shimmer));
+        Color baseColor = slide.GlowColor.A > 0 ? slide.GlowColor : slide.AccentColor;
+
+        return new Grid
+        {
+            Background = new SolidColorBrush(Mix(baseColor, Colors.Black, 0.64, 255)),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch,
+            IsHitTestVisible = false,
+        };
     }
 
-    private void OnHeroBitmapOpened(Uri uri, BitmapImage bitmap)
+    private void BeginHeroImageLoad(object? item, HeroCarouselSlide slide, Image image, FrameworkElement placeholder)
     {
-        _loadedImageUris.Add(uri);
-        Debug.WriteLine($"HC_IMAGE opened uri={uri} size=({bitmap.PixelWidth},{bitmap.PixelHeight}) pending={GetPendingRevealCount(uri)}");
+        object? imageValue = GetSlideImage(slide);
+        IHeroCarouselImageProvider provider = ImageProvider;
+        object? cacheKey = provider.GetCacheKey(item, imageValue);
 
-        if (!_pendingImageReveals.Remove(uri, out List<PendingHeroImageReveal>? pending))
+        if (cacheKey is not null && _imageCache.TryGetValue(cacheKey, out ImageSource? cachedSource))
         {
+            SetHeroImageSource(image, placeholder, cachedSource, true);
+            return;
+        }
+
+        CancellationTokenSource cancellation = new();
+        _imageLoadTokens[image] = cancellation;
+        _ = LoadHeroImageAsync(provider, item, imageValue, cacheKey, image, placeholder, cancellation);
+    }
+
+    private static object? GetSlideImage(HeroCarouselSlide slide)
+    {
+        return slide.Image ?? slide.ImageUri;
+    }
+
+    private async Task LoadHeroImageAsync(
+        IHeroCarouselImageProvider provider,
+        object? item,
+        object? imageValue,
+        object? cacheKey,
+        Image image,
+        FrameworkElement placeholder,
+        CancellationTokenSource cancellation)
+    {
+        ImageSource? source = null;
+
+        try
+        {
+            source = await provider.LoadAsync(item, imageValue, cancellation.Token);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"HC_IMAGE failed value={imageValue} error={ex.Message}");
+        }
+
+        if (cancellation.IsCancellationRequested)
+        {
+            cancellation.Dispose();
             return;
         }
 
@@ -342,36 +689,127 @@ public sealed partial class HeroCarouselView : UserControl
         {
             await Task.Yield();
 
-            foreach (PendingHeroImageReveal reveal in pending)
+            if (!_imageLoadTokens.TryGetValue(image, out CancellationTokenSource? current) ||
+                !ReferenceEquals(current, cancellation))
             {
-                RevealLoadedHeroImage(reveal.Image, reveal.Shimmer, false);
+                cancellation.Dispose();
+                return;
             }
+
+            _imageLoadTokens.Remove(image);
+            cancellation.Dispose();
+
+            if (source is null)
+            {
+                StopImageShimmer(placeholder);
+                return;
+            }
+
+            if (cacheKey is not null)
+            {
+                AddImageToCache(cacheKey, source);
+            }
+
+            SetHeroImageSource(image, placeholder, source, false);
         });
     }
 
-    private void OnHeroBitmapFailed(Uri uri, string errorMessage)
+    private void SetHeroImageSource(Image image, FrameworkElement placeholder, ImageSource source, bool fromCache)
     {
-        Debug.WriteLine($"HC_IMAGE failed uri={uri} error={errorMessage} pending={GetPendingRevealCount(uri)}");
-        _imageCache.Remove(uri);
+        image.ImageOpened -= OnHeroImageOpened;
+        image.ImageFailed -= OnHeroImageFailed;
+        image.ImageOpened += OnHeroImageOpened;
+        image.ImageFailed += OnHeroImageFailed;
+        _imagePlaceholders[image] = placeholder;
+        image.Source = source;
 
-        if (!_pendingImageReveals.Remove(uri, out List<PendingHeroImageReveal>? pending))
+        if (IsImageSourceLoaded(source))
+        {
+            DispatcherQueue.TryEnqueue(async () =>
+            {
+                await Task.Yield();
+                RevealLoadedHeroImage(image, placeholder, false);
+            });
+        }
+    }
+
+    private void OnHeroImageOpened(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Image image ||
+            !_imagePlaceholders.TryGetValue(image, out FrameworkElement? placeholder))
         {
             return;
         }
 
+        Debug.WriteLine("HC_IMAGE opened");
         DispatcherQueue.TryEnqueue(() =>
         {
-            foreach (PendingHeroImageReveal reveal in pending)
-            {
-                StopImageShimmer(reveal.Shimmer);
-                FadeElement(reveal.Shimmer, 0, 260, () => reveal.Shimmer.Visibility = Visibility.Collapsed);
-            }
+            RevealLoadedHeroImage(image, placeholder, false);
         });
     }
 
-    private int GetPendingRevealCount(Uri uri)
+    private void OnHeroImageFailed(object sender, ExceptionRoutedEventArgs e)
     {
-        return _pendingImageReveals.TryGetValue(uri, out List<PendingHeroImageReveal>? pending) ? pending.Count : 0;
+        if (sender is not Image image ||
+            !_imagePlaceholders.TryGetValue(image, out FrameworkElement? placeholder))
+        {
+            return;
+        }
+
+        Debug.WriteLine($"HC_IMAGE failed error={e.ErrorMessage}");
+        StopImageShimmer(placeholder);
+        FadeElement(placeholder, 0, 260, () => placeholder.Visibility = Visibility.Collapsed);
+    }
+
+    private static bool IsImageSourceLoaded(ImageSource source)
+    {
+        return source is not BitmapImage bitmap || bitmap.PixelWidth > 0 || bitmap.PixelHeight > 0;
+    }
+
+    private void AddImageToCache(object cacheKey, ImageSource source)
+    {
+        if (!_imageCache.ContainsKey(cacheKey))
+        {
+            _imageCacheOrder.Enqueue(cacheKey);
+        }
+
+        _imageCache[cacheKey] = source;
+        TrimImageCache();
+    }
+
+    private void TrimImageCache()
+    {
+        int capacity = Math.Max(0, ImageCacheCapacity);
+
+        while (_imageCache.Count > capacity && _imageCacheOrder.Count > 0)
+        {
+            object cacheKey = _imageCacheOrder.Dequeue();
+            _imageCache.Remove(cacheKey);
+        }
+    }
+
+    private void ClearImageCache()
+    {
+        _imageCache.Clear();
+        _imageCacheOrder.Clear();
+    }
+
+    private void CleanupImageLoadState()
+    {
+        foreach (CancellationTokenSource cancellation in _imageLoadTokens.Values)
+        {
+            cancellation.Cancel();
+            cancellation.Dispose();
+        }
+
+        foreach (Image image in _imagePlaceholders.Keys)
+        {
+            image.ImageOpened -= OnHeroImageOpened;
+            image.ImageFailed -= OnHeroImageFailed;
+        }
+
+        _imageLoadTokens.Clear();
+        _imagePlaceholders.Clear();
     }
 
     private void RevealLoadedHeroImage(Image image, FrameworkElement shimmer, bool immediate)
@@ -532,7 +970,7 @@ public sealed partial class HeroCarouselView : UserControl
         storyboard.Begin();
     }
 
-    private Grid CreateContentSlide(HeroCarouselSlide slide, int index)
+    private Grid CreateContentSlide(object? item, HeroCarouselSlide slide, int index)
     {
         Grid slideRoot = new()
         {
@@ -540,6 +978,25 @@ public sealed partial class HeroCarouselView : UserControl
             VerticalAlignment = VerticalAlignment.Stretch,
             Padding = new Thickness(GetContentInset(), 0, 0, 0),
         };
+
+        if (ContentTemplate is not null)
+        {
+            ContentControl content = new()
+            {
+                Content = item,
+                ContentTemplate = ContentTemplate,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Center,
+                RenderTransform = new CompositeTransform(),
+                RenderTransformOrigin = new Point(0, 0.5),
+            };
+
+            slideRoot.Children.Add(content);
+            _contentCards.Add(content);
+            _contentCardLayers.Add(new ContentCardLayers(null, null, null, null, null, []));
+
+            return slideRoot;
+        }
 
         StackPanel card = new()
         {
@@ -614,7 +1071,11 @@ public sealed partial class HeroCarouselView : UserControl
             MinWidth = 128,
             MinHeight = 0,
         };
-        Grid cta = CreateRevealHost(ctaContent, slide, out FrameworkElement ctaReveal, 8, slide.CtaUsesGlass ? 0.24 : 0.30);
+        FrameworkElement? ctaReveal = null;
+        FrameworkElement cta = UseButtonReveal
+            ? CreateRevealHost(ctaContent, slide, out ctaReveal, 8, slide.CtaUsesGlass ? 0.24 : 0.30)
+            : ctaContent;
+
         cta.Margin = new Thickness(0, 4, 0, 0);
         PrepareParallaxLayer(cta);
 
@@ -637,7 +1098,7 @@ public sealed partial class HeroCarouselView : UserControl
         slideRoot.Children.Add(card);
         _contentCards.Add(card);
 
-        List<FrameworkElement> revealLayers = [ctaReveal];
+        List<FrameworkElement> revealLayers = ctaReveal is not null ? [ctaReveal] : [];
 
         _contentCardLayers.Add(new ContentCardLayers(tagLayer, title, subtitle, cta, ratingLayer, revealLayers));
 
@@ -1388,20 +1849,24 @@ public sealed partial class HeroCarouselView : UserControl
 
     private void ApplyGlow(int index, bool immediate)
     {
-        if (SlideCount == 0 || _activeGlow is null)
+        if (!UseGlow || SlideCount == 0 || _activeGlow is null)
         {
+            GlowCanvasA.Opacity = 0;
+            GlowCanvasB.Opacity = 0;
             return;
         }
 
+        index = WrapLogicalIndex(index);
+        Color glowColor = GetSlide(index).GlowColor;
         CanvasControl next = ReferenceEquals(_activeGlow, GlowCanvasA) ? GlowCanvasB : GlowCanvasA;
 
         if (ReferenceEquals(next, GlowCanvasA))
         {
-            _glowColorA = Slides[index].GlowColor;
+            _glowColorA = glowColor;
         }
         else
         {
-            _glowColorB = Slides[index].GlowColor;
+            _glowColorB = glowColor;
         }
 
         next.Invalidate();
@@ -1428,11 +1893,39 @@ public sealed partial class HeroCarouselView : UserControl
         {
             SlidePips.NumberOfPages = Math.Max(1, SlideCount);
             SlidePips.SelectedPageIndex = Math.Clamp(_currentIndex, 0, SlidePips.NumberOfPages - 1);
-            SlidePips.Visibility = SlideCount > 1 ? Visibility.Visible : Visibility.Collapsed;
+            SlidePips.Visibility = ShowPips && SlideCount > 1 ? Visibility.Visible : Visibility.Collapsed;
         }
         finally
         {
             _updatingPips = false;
+        }
+    }
+
+    private void UpdateChromeVisibility()
+    {
+        Visibility navigationVisibility = ShowNavigationButtons && SlideCount > 1 ? Visibility.Visible : Visibility.Collapsed;
+        PrevButton.Visibility = navigationVisibility;
+        NextButton.Visibility = navigationVisibility;
+
+        if (navigationVisibility == Visibility.Collapsed)
+        {
+            PrevButton.Opacity = 0;
+            NextButton.Opacity = 0;
+        }
+
+        SlidePips.Visibility = ShowPips && SlideCount > 1 ? Visibility.Visible : Visibility.Collapsed;
+        SpotlightCanvas.Visibility = UseSpotlight ? Visibility.Visible : Visibility.Collapsed;
+
+        if (!UseSpotlight)
+        {
+            SpotlightCanvas.Opacity = 0;
+            _spotlightOpacity = 0;
+        }
+
+        if (!UseGlow)
+        {
+            GlowCanvasA.Opacity = 0;
+            GlowCanvasB.Opacity = 0;
         }
     }
 
@@ -1456,20 +1949,34 @@ public sealed partial class HeroCarouselView : UserControl
 
     private void OnStagePointerEntered(object sender, PointerRoutedEventArgs e)
     {
-        _spotlightOpacity = 1;
-        AnimateOpacity(SpotlightCanvas, 1, TimeSpan.FromMilliseconds(250));
-        AnimateOpacity(PrevButton, 1, TimeSpan.FromMilliseconds(NavAnimationMs));
-        AnimateOpacity(NextButton, 1, TimeSpan.FromMilliseconds(NavAnimationMs));
-        SpotlightCanvas.Invalidate();
+        if (UseSpotlight)
+        {
+            _spotlightOpacity = 1;
+            AnimateOpacity(SpotlightCanvas, 1, TimeSpan.FromMilliseconds(250));
+            SpotlightCanvas.Invalidate();
+        }
+
+        if (ShowNavigationButtons && SlideCount > 1)
+        {
+            AnimateOpacity(PrevButton, 1, TimeSpan.FromMilliseconds(NavAnimationMs));
+            AnimateOpacity(NextButton, 1, TimeSpan.FromMilliseconds(NavAnimationMs));
+        }
     }
 
     private void OnStagePointerExited(object sender, PointerRoutedEventArgs e)
     {
-        _spotlightOpacity = 0;
-        AnimateOpacity(SpotlightCanvas, 0, TimeSpan.FromMilliseconds(250));
-        AnimateOpacity(PrevButton, 0, TimeSpan.FromMilliseconds(NavAnimationMs));
-        AnimateOpacity(NextButton, 0, TimeSpan.FromMilliseconds(NavAnimationMs));
-        SpotlightCanvas.Invalidate();
+        if (UseSpotlight)
+        {
+            _spotlightOpacity = 0;
+            AnimateOpacity(SpotlightCanvas, 0, TimeSpan.FromMilliseconds(250));
+            SpotlightCanvas.Invalidate();
+        }
+
+        if (ShowNavigationButtons && SlideCount > 1)
+        {
+            AnimateOpacity(PrevButton, 0, TimeSpan.FromMilliseconds(NavAnimationMs));
+            AnimateOpacity(NextButton, 0, TimeSpan.FromMilliseconds(NavAnimationMs));
+        }
     }
 
     private void OnStagePointerMoved(object sender, PointerRoutedEventArgs e)
@@ -1484,7 +1991,11 @@ public sealed partial class HeroCarouselView : UserControl
         Point position = e.GetCurrentPoint(StageRoot).Position;
         _spotlightX = (float)position.X;
         _spotlightY = (float)position.Y;
-        SpotlightCanvas.Invalidate();
+
+        if (UseSpotlight)
+        {
+            SpotlightCanvas.Invalidate();
+        }
     }
 
     private void OnStagePointerPressed(object sender, PointerRoutedEventArgs e)
@@ -2111,7 +2622,10 @@ public sealed partial class HeroCarouselView : UserControl
         UpdateLayoutForStageSize();
         CacheCompositionVisuals();
         SetTransforms(true);
-        SpotlightCanvas.Invalidate();
+        if (UseSpotlight)
+        {
+            SpotlightCanvas.Invalidate();
+        }
         LogLayoutSnapshot("stage-size-changed-immediate");
         DispatcherQueue.TryEnqueue(() =>
         {
@@ -2123,7 +2637,7 @@ public sealed partial class HeroCarouselView : UserControl
 
     private void StartContentHighlight()
     {
-        if (!_isLoaded || SlideCount == 0 || _stageWidth <= 0 || _stageHeight <= 0)
+        if (!UseButtonReveal || !_isLoaded || SlideCount == 0 || _stageWidth <= 0 || _stageHeight <= 0)
         {
             return;
         }
@@ -2228,7 +2742,7 @@ public sealed partial class HeroCarouselView : UserControl
 
     private void OnGlowCanvasDraw(CanvasControl sender, CanvasDrawEventArgs args)
     {
-        if (sender.ActualWidth <= 0 || sender.ActualHeight <= 0)
+        if (!UseGlow || sender.ActualWidth <= 0 || sender.ActualHeight <= 0)
         {
             return;
         }
@@ -2260,7 +2774,7 @@ public sealed partial class HeroCarouselView : UserControl
 
     private void OnSpotlightCanvasDraw(CanvasControl sender, CanvasDrawEventArgs args)
     {
-        if (sender.ActualWidth <= 0 || sender.ActualHeight <= 0)
+        if (!UseSpotlight || sender.ActualWidth <= 0 || sender.ActualHeight <= 0)
         {
             return;
         }
@@ -2313,19 +2827,19 @@ public sealed partial class HeroCarouselView : UserControl
 
     private sealed class ContentCardLayers(
         FrameworkElement? tag,
-        FrameworkElement title,
-        FrameworkElement subtitle,
-        FrameworkElement cta,
+        FrameworkElement? title,
+        FrameworkElement? subtitle,
+        FrameworkElement? cta,
         FrameworkElement? rating,
         IReadOnlyList<FrameworkElement> revealLayers)
     {
         public FrameworkElement? Tag { get; } = tag;
 
-        public FrameworkElement Title { get; } = title;
+        public FrameworkElement? Title { get; } = title;
 
-        public FrameworkElement Subtitle { get; } = subtitle;
+        public FrameworkElement? Subtitle { get; } = subtitle;
 
-        public FrameworkElement Cta { get; } = cta;
+        public FrameworkElement? Cta { get; } = cta;
 
         public FrameworkElement? Rating { get; } = rating;
 
@@ -2357,10 +2871,4 @@ public sealed partial class HeroCarouselView : UserControl
         public Vector3 BaseOffset { get; } = baseOffset;
     }
 
-    private sealed class PendingHeroImageReveal(Image image, FrameworkElement shimmer)
-    {
-        public Image Image { get; } = image;
-
-        public FrameworkElement Shimmer { get; } = shimmer;
-    }
 }

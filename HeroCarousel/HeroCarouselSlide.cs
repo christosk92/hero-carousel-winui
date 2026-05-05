@@ -4,6 +4,8 @@ namespace HeroCarousel;
 
 public sealed class HeroCarouselSlide
 {
+    public object? Image { get; set; }
+
     public Uri ImageUri { get; set; } = new("https://picsum.photos/id/1018/2400/1400");
 
     public string? Tag { get; set; }
