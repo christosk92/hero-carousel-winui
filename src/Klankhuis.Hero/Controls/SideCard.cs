@@ -121,9 +121,17 @@ public sealed class SideCard : Control
         // Layer 2: cover image, right-anchored with left-fade mask
         _coverVisual = _compositor.CreateSpriteVisual();
 
+        // Stack order, back to front:
+        //   1. Cover image (full image, no mask) — bottom layer.
+        //   2. Wash — translucent accent overlay on top of the cover,
+        //      heavy on the left and fading to transparent on the right
+        //      so the cover and wash *merge* in the middle (carousel
+        //      image-bg pattern). Wash is rendered ON TOP of the image,
+        //      not below, so its alpha lets the image bleed through.
+        //   3. Highlight — small bright top-left spot, optional accent.
+        root.Children.InsertAtTop(_coverVisual);
         root.Children.InsertAtTop(_washVisual);
         root.Children.InsertAtTop(_highlightVisual);
-        root.Children.InsertAtTop(_coverVisual);
 
         ElementCompositionPreview.SetElementChildVisual(_compositionHost, root);
 
@@ -148,29 +156,86 @@ public sealed class SideCard : Control
     {
         if (_compositor is null || _washVisual is null || _highlightVisual is null) return;
 
-        // Diagonal base — full accent at the top-left → 88%-black-mixed at the
-        // bottom-right (matches the CSS 125deg gradient).
-        var linear = _compositor.CreateLinearGradientBrush();
-        linear.MappingMode = CompositionMappingMode.Relative;
-        // 125° in CSS measures clockwise from the top — that's roughly the
-        // top-left → bottom-right diagonal on a card.
-        linear.StartPoint = new Vector2(0f, 0f);
-        linear.EndPoint = new Vector2(1f, 1f);
-        var stop0 = _compositor.CreateColorGradientStop();
-        stop0.Offset = 0f;
-        stop0.Color = Accent;
-        var stop1 = _compositor.CreateColorGradientStop();
-        stop1.Offset = 0.45f;
-        stop1.Color = AccentMath.WithBlack(Accent, 0.55);
-        var stop2 = _compositor.CreateColorGradientStop();
-        stop2.Offset = 1f;
-        stop2.Color = AccentMath.WithBlack(Accent, 0.88);
-        linear.ColorStops.Add(stop0);
-        linear.ColorStops.Add(stop1);
-        linear.ColorStops.Add(stop2);
-        _washVisual.Brush = linear;
+        // The wash is now a tinted version of the COVER IMAGE itself,
+        // masked by a horizontal alpha gradient — not a flat colour
+        // slab. BlendEffect.Multiply takes the image and the accent
+        // colour; the result is the image with its pixels multiplied
+        // by the accent (image's lights become accent-coloured, darks
+        // stay dark, mid-tones become darkened accent). The mask then
+        // shows this tinted image only on the left, fading to fully
+        // transparent toward the right where the un-tinted bottom
+        // layer (_coverVisual) shows through. Image structure
+        // (highlights, edges, shadows) stays visible everywhere — the
+        // accent merges INTO the image's pixels rather than sitting
+        // ON TOP as a coloured rectangle.
+        if (_coverSurface is not null)
+        {
+            var imageBrush = _compositor.CreateSurfaceBrush(_coverSurface);
+            imageBrush.Stretch = CompositionStretch.UniformToFill;
 
-        // Top-left highlight — a small bright spot fading to transparent.
+            var accentBrush = _compositor.CreateColorBrush(Accent);
+
+            var blend = new Microsoft.Graphics.Canvas.Effects.BlendEffect
+            {
+                Mode = Microsoft.Graphics.Canvas.Effects.BlendEffectMode.Multiply,
+                Background = new CompositionEffectSourceParameter("image"),
+                Foreground = new CompositionEffectSourceParameter("accent"),
+            };
+            var factory = _compositor.CreateEffectFactory(blend);
+            var tintedBrush = factory.CreateBrush();
+            tintedBrush.SetSourceParameter("image", imageBrush);
+            tintedBrush.SetSourceParameter("accent", accentBrush);
+
+            var mask = _compositor.CreateLinearGradientBrush();
+            mask.MappingMode = CompositionMappingMode.Relative;
+            mask.StartPoint = new Vector2(0f, 0.5f);
+            mask.EndPoint = new Vector2(1f, 0.5f);
+            var m0 = _compositor.CreateColorGradientStop();
+            m0.Offset = 0f;
+            m0.Color = Windows.UI.Color.FromArgb(255, 0, 0, 0);
+            var m1 = _compositor.CreateColorGradientStop();
+            m1.Offset = 0.22f;
+            m1.Color = Windows.UI.Color.FromArgb(235, 0, 0, 0);
+            var m2 = _compositor.CreateColorGradientStop();
+            m2.Offset = 0.50f;
+            m2.Color = Windows.UI.Color.FromArgb(110, 0, 0, 0);
+            var m3 = _compositor.CreateColorGradientStop();
+            m3.Offset = 0.85f;
+            m3.Color = Windows.UI.Color.FromArgb(0, 0, 0, 0);
+            mask.ColorStops.Add(m0);
+            mask.ColorStops.Add(m1);
+            mask.ColorStops.Add(m2);
+            mask.ColorStops.Add(m3);
+
+            var maskBrush = _compositor.CreateMaskBrush();
+            maskBrush.Source = tintedBrush;
+            maskBrush.Mask = mask;
+
+            _washVisual.Brush = maskBrush;
+        }
+        else
+        {
+            // No image yet — fall back to a faint accent gradient so
+            // the card isn't blank during initial layout.
+            var fallback = _compositor.CreateLinearGradientBrush();
+            fallback.MappingMode = CompositionMappingMode.Relative;
+            fallback.StartPoint = new Vector2(0f, 0.5f);
+            fallback.EndPoint = new Vector2(1f, 0.5f);
+            var f0 = _compositor.CreateColorGradientStop();
+            f0.Offset = 0f;
+            f0.Color = Windows.UI.Color.FromArgb(180, Accent.R, Accent.G, Accent.B);
+            var f1 = _compositor.CreateColorGradientStop();
+            f1.Offset = 1f;
+            f1.Color = Windows.UI.Color.FromArgb(0, Accent.R, Accent.G, Accent.B);
+            fallback.ColorStops.Add(f0);
+            fallback.ColorStops.Add(f1);
+            _washVisual.Brush = fallback;
+        }
+
+        // Highlight — kept subtle. Top-left bright accent spot adds a
+        // touch of life; opacity-capped so it doesn't fight the
+        // tinted-image wash for attention.
+        _highlightVisual.Opacity = 0.25f;
         var radial = _compositor.CreateRadialGradientBrush();
         radial.MappingMode = CompositionMappingMode.Relative;
         radial.EllipseCenter = new Vector2(0.08f, 0.25f);
@@ -193,10 +258,16 @@ public sealed class SideCard : Control
     private void UpdateCoverSize()
     {
         if (_coverVisual is null) return;
-        // Cover anchored to the right, ~60% (small) / 55% (big) wide, full height.
-        var widthFraction = Big ? 0.55f : 0.60f;
-        _coverVisual.RelativeSizeAdjustment = new Vector2(widthFraction, 1f);
-        _coverVisual.RelativeOffsetAdjustment = new Vector3(1f - widthFraction, 0f, 0f);
+        // Cover fills the entire card. The right-anchored 55/60-percent
+        // sizing the previous version used was meant to confine the
+        // image to a "thumbnail slot" on the right, but that left a hard
+        // edge where the cover met the wash slab. With the wash now
+        // rendered as a horizontal alpha-fade overlay on TOP of the
+        // image (carousel image-bg pattern), the image stretches across
+        // the full card and the wash tints its left portion — same
+        // composition the main hero gets.
+        _coverVisual.RelativeSizeAdjustment = Vector2.One;
+        _coverVisual.RelativeOffsetAdjustment = Vector3.Zero;
     }
 
     private void LoadCoverImage()
@@ -212,32 +283,20 @@ public sealed class SideCard : Control
         }
 
         _coverSurface = LoadedImageSurface.StartLoadFromUri(ImageUri);
+
+        // Bottom layer — clean image filling the card. UniformToFill
+        // is the user's "stretch since it's 1:1" preference; some
+        // crop is acceptable on wide cards. The tinted wash on top
+        // (built in UpdateWashColors) renders the SAME image
+        // multiplied by the accent and masked horizontally, so left
+        // → right reads as smoothly tinted-to-untinted across the
+        // SAME cover artwork — no flat-colour rectangle anywhere.
         var imageBrush = _compositor.CreateSurfaceBrush(_coverSurface);
         imageBrush.Stretch = CompositionStretch.UniformToFill;
+        _coverVisual.Brush = imageBrush;
 
-        // Mask brush — true linear ramp from transparent at the left edge
-        // to opaque at the right edge. The previous version reached full
-        // opacity at 30–35 % and then plateaued, which read as a hard
-        // shoulder where the wash visibly cut off into the image. Using
-        // two stops at 0 and 1 spreads the transition across the entire
-        // card width so the wash decays smoothly into the cover.
-        var mask = _compositor.CreateLinearGradientBrush();
-        mask.MappingMode = CompositionMappingMode.Relative;
-        mask.StartPoint = new Vector2(0f, 0.5f);
-        mask.EndPoint = new Vector2(1f, 0.5f);
-        var ms0 = _compositor.CreateColorGradientStop();
-        ms0.Offset = 0f;
-        ms0.Color = Windows.UI.Color.FromArgb(0, 0, 0, 0);
-        var ms1 = _compositor.CreateColorGradientStop();
-        ms1.Offset = 1f;
-        ms1.Color = Windows.UI.Color.FromArgb(255, 0, 0, 0);
-        mask.ColorStops.Add(ms0);
-        mask.ColorStops.Add(ms1);
-
-        var maskBrush = _compositor.CreateMaskBrush();
-        maskBrush.Source = imageBrush;
-        maskBrush.Mask = mask;
-
-        _coverVisual.Brush = maskBrush;
+        // Wash now depends on _coverSurface — rebuild it now the
+        // surface exists.
+        UpdateWashColors();
     }
 }

@@ -39,6 +39,14 @@ internal sealed class HeroSlideVisual : IDisposable
     /// <c>_coverImageMask.Mask</c>.
     /// </summary>
     private readonly CompositionMaskBrush _coverImageMask;
+    /// <summary>
+    /// The brushless <see cref="SpriteVisual"/> that hosts the cover's
+    /// drop shadow (sits between the glow halo and the image itself in
+    /// the cover sub-tree). Tracked as a field so
+    /// <see cref="SetCoverVisible"/> can toggle its opacity alongside
+    /// the image and glow when a slide opts in to image-as-background.
+    /// </summary>
+    private readonly SpriteVisual _coverShadowHost;
     private LoadedImageSurface? _coverSurface;
     private bool _disposed;
 
@@ -161,7 +169,8 @@ internal sealed class HeroSlideVisual : IDisposable
         // the soft fall-off; alpha is bumped vs the previous geometric-
         // clipped attempt because that one was eating most of the shadow
         // alpha at the visual's bottom edge.
-        var coverShadowHost = compositor.CreateSpriteVisual();
+        _coverShadowHost = compositor.CreateSpriteVisual();
+        var coverShadowHost = _coverShadowHost;
         var shadowSize = compositor.CreateExpressionAnimation(
             $"Vector2(host.Size.Y * {CoverFraction.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)}, " +
             $"host.Size.Y * {CoverFraction.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)})");
@@ -239,6 +248,22 @@ internal sealed class HeroSlideVisual : IDisposable
     {
         Background.Brush = brush;
         BackgroundArt.Brush = brush;
+    }
+
+    /// <summary>
+    /// Toggles visibility of the cover-image group (image, glow halo,
+    /// drop shadow) by flipping each sub-visual's <c>Opacity</c>. Used
+    /// by the carousel for slides flagged
+    /// <see cref="HeroCarouselItem.UseImageAsBackground"/>: the image is
+    /// already in the slide's baked backdrop, so the right-anchored
+    /// thumbnail group should disappear.
+    /// </summary>
+    public void SetCoverVisible(bool visible)
+    {
+        var opacity = visible ? 1f : 0f;
+        CoverImage.Opacity = opacity;
+        CoverGlow.Opacity = opacity;
+        _coverShadowHost.Opacity = opacity;
     }
 
     /// <summary>Apply the cover image brush as the masked source.</summary>

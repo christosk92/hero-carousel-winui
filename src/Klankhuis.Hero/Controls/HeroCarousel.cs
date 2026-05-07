@@ -583,6 +583,16 @@ public sealed class HeroCarousel : Control
             _stageRoot.Children.InsertAtTop(slide.Root);
             _slides.Add(slide);
 
+            // Slides flagged UseImageAsBackground hide their right-anchored
+            // cover thumbnail group — the image is already baked into the
+            // slide backdrop, so a duplicate thumbnail would compete with
+            // it. The bake-time choice is wired into BakeAllAsync below;
+            // this is the layout-side counterpart.
+            if (items[i].UseImageAsBackground)
+            {
+                slide.SetCoverVisible(false);
+            }
+
             // Cover image — slide owns the LoadedImageSurface lifetime so
             // the async load isn't interrupted by GC (matches the SideCard
             // pattern that's already working).
@@ -786,7 +796,13 @@ public sealed class HeroCarousel : Control
 
             try
             {
-                var brush = await _surfaceCache.GetBrushAsync(item.ImageUri, item.Accent, pixelSize, isDark, ct);
+                var brush = await _surfaceCache.GetBrushAsync(
+                    item.ImageUri,
+                    item.Accent,
+                    pixelSize,
+                    isDark,
+                    item.UseImageAsBackground,
+                    ct);
                 if (brush is not null && i < _slides.Count)
                 {
                     _slides[i].SetBackdrop(brush);
@@ -801,26 +817,40 @@ public sealed class HeroCarousel : Control
             // image-derived dominant lands, we swap in the more vibrant
             // colour. If extraction returns the neutral DefaultAccent
             // sentinel we leave the seed accent in place.
-            if (i < _ctaButtons.Count)
+            try
             {
-                var (primary, secondary) = _ctaButtons[i];
-                if (primary is not null || secondary is not null)
+                var extracted = await _surfaceCache.GetExtractedAccentAsync(item.ImageUri, ct);
+                if (extracted != BakedSurfaceCache.DefaultAccent)
                 {
-                    try
+                    // Re-theme this slide's CTA buttons to the image-dominant
+                    // accent (overrides the seed accent the buttons were
+                    // initially built with).
+                    if (i < _ctaButtons.Count)
                     {
-                        var extracted = await _surfaceCache.GetExtractedAccentAsync(item.ImageUri, ct);
-                        if (extracted != BakedSurfaceCache.DefaultAccent)
-                        {
-                            if (primary is not null)
-                                OverlayBuilder.RethemeCtaButton(primary, extracted, primary: true);
-                            if (secondary is not null)
-                                OverlayBuilder.RethemeCtaButton(secondary, extracted, primary: false);
-                        }
+                        var (primary, secondary) = _ctaButtons[i];
+                        if (primary is not null)
+                            OverlayBuilder.RethemeCtaButton(primary, extracted, primary: true);
+                        if (secondary is not null)
+                            OverlayBuilder.RethemeCtaButton(secondary, extracted, primary: false);
                     }
-                    catch (OperationCanceledException) { return; }
-                    catch { /* keep seed accent */ }
+
+                    // For slides that use the cover as their bg, the halo
+                    // should also follow the image-dominant accent — the
+                    // seed accent is hand-curated and may not match the
+                    // image's actual dominant colour (e.g., a slate-blue
+                    // seed on a red cover gives a blue halo around a red
+                    // slide). Update the per-slide entry the halo lerps
+                    // across, then refresh the published CurrentAccent.
+                    if (item.UseImageAsBackground &&
+                        _slideAccents is { } accents && i < accents.Length)
+                    {
+                        accents[i] = extracted;
+                        RefreshAccentFromCurrentPosition();
+                    }
                 }
             }
+            catch (OperationCanceledException) { return; }
+            catch { /* keep seed accent */ }
         }
     }
 

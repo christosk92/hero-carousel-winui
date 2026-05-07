@@ -188,17 +188,6 @@
                               Background="Transparent"
                               IsHitTestVisible="False"/>
 
-                        <!-- Bottom darkening for label legibility -->
-                        <Border IsHitTestVisible="False">
-                            <Border.Background>
-                                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                                    <GradientStop Color="#00000000" Offset="0.0"/>
-                                    <GradientStop Color="#26000000" Offset="0.45"/>
-                                    <GradientStop Color="#C7000000" Offset="1.0"/>
-                                </LinearGradientBrush>
-                            </Border.Background>
-                        </Border>
-
                         <!-- Eyebrow (always rendered; shows blank when null —
                              UI is small enough we don't bother with a converter) -->
                         <Border Style="{StaticResource EyebrowChipStyle}">

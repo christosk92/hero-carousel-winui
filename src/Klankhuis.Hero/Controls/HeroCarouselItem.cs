@@ -43,6 +43,23 @@ public sealed class HeroCarouselItem
     public Uri? ImageUri { get; set; }
 
     /// <summary>
+    /// When <see langword="true"/>, the cover image fills the slide's
+    /// backdrop and fades horizontally from visible on the left to
+    /// transparent on the right; the right-anchored cover thumbnail is
+    /// hidden. Default <see langword="false"/> = the existing behaviour
+    /// (GPU-baked accent wash + right-side cover thumbnail).
+    /// </summary>
+    /// <remarks>
+    /// The image is baked with a left-darken gradient so title / tagline
+    /// / CTAs stay readable on top, and the existing accent radial wash
+    /// is reused on the right edge so the slide still picks up the
+    /// per-item <see cref="Accent"/>. Both image and fade boundary
+    /// parallax with the slide via the existing <c>BackgroundArt</c>
+    /// sprite visual.
+    /// </remarks>
+    public bool UseImageAsBackground { get; set; }
+
+    /// <summary>
     /// Optional small badge image rendered above the eyebrow chip — the
     /// "app icon" in Microsoft Store hero rail terms (e.g., a 56-px-square
     /// product logo). <see langword="null"/> hides the badge slot.

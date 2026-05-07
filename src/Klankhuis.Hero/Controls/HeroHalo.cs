@@ -71,14 +71,14 @@ public static class HeroHalo
         obj.SetValue(SourceProperty, value);
 
     /// <summary>
-    /// Composition <see cref="DropShadow.BlurRadius"/>. Default 120 px.
+    /// Composition <see cref="DropShadow.BlurRadius"/>. Default 100 px.
     /// The visible halo extent is roughly <c>BlurRadius × 1.5</c>; raising
     /// this softens the falloff and reaches further from the host element.
     /// </summary>
     public static readonly DependencyProperty BlurRadiusProperty =
         DependencyProperty.RegisterAttached(
             "BlurRadius", typeof(double), typeof(HeroHalo),
-            new PropertyMetadata(120.0, OnBlurRadiusChanged));
+            new PropertyMetadata(100.0, OnBlurRadiusChanged));
 
     public static double GetBlurRadius(DependencyObject obj) =>
         (double)obj.GetValue(BlurRadiusProperty);
@@ -101,15 +101,16 @@ public static class HeroHalo
         obj.SetValue(CornerRadiusProperty, value);
 
     /// <summary>
-    /// Halo opacity multiplier (0.0 – 1.0). Default 0.9 — accents that
-    /// land near the page background colour (e.g., navy on a near-black
-    /// page) need a high alpha to read at all; lower for warmer accents
-    /// or to dial down the "now-playing" feel.
+    /// Halo opacity multiplier (0.0 – 1.0). Default 0.4 — gives a soft
+    /// ambient ring that picks up the active slide's accent without
+    /// competing with the carousel itself for attention. Raise toward
+    /// 0.7+ for a saturated "now-playing" glow; down to 0.2 for a
+    /// barely-there warm cast.
     /// </summary>
     public static readonly DependencyProperty IntensityProperty =
         DependencyProperty.RegisterAttached(
             "Intensity", typeof(double), typeof(HeroHalo),
-            new PropertyMetadata(0.9, OnIntensityChanged));
+            new PropertyMetadata(0.4, OnIntensityChanged));
 
     public static double GetIntensity(DependencyObject obj) =>
         (double)obj.GetValue(IntensityProperty);

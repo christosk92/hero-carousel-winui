@@ -81,12 +81,13 @@ public sealed class BakedSurfaceCache : IDisposable
         Windows.UI.Color accent,
         SizeInt32 pixelSize,
         bool isDarkTheme,
+        bool useImageBackground = false,
         CancellationToken ct = default)
     {
         if (_disposed) return null;
         if (pixelSize.Width <= 0 || pixelSize.Height <= 0) return null;
 
-        var key = new CacheKey(imageUri, accent, pixelSize, isDarkTheme);
+        var key = new CacheKey(imageUri, accent, pixelSize, isDarkTheme, useImageBackground);
 
         lock (_gate)
         {
@@ -120,22 +121,27 @@ public sealed class BakedSurfaceCache : IDisposable
             DirectXPixelFormat.B8G8R8A8UIntNormalized,
             DirectXAlphaMode.Premultiplied);
 
-        BakeImperative(surface, bitmap, accent, pixelSize, isDarkTheme);
-
-        // Extract dominant color from the same bitmap before disposing —
-        // the alternative is a separate Stream + CanvasBitmap.LoadAsync
-        // round trip per slide just to read the dominant. Result is
-        // cached per-URI so subsequent GetExtractedAccentAsync calls are
-        // a dictionary hit, not a load.
+        // Extract dominant colour from the bitmap *before* the bake so
+        // the bake itself can tint with it (image-bg mode uses the
+        // dominant for the left slab so the tint matches what the CTA
+        // buttons pick up). Cached per-URI; the alternative is a
+        // separate Stream + CanvasBitmap.LoadAsync round trip per slide
+        // just to read the dominant.
+        Windows.UI.Color dominant;
         try
         {
-            var dominant = SampleAndExtract(bitmap);
+            dominant = SampleAndExtract(bitmap);
             lock (_gate)
             {
                 _accentCache[imageUri] = dominant;
             }
         }
-        catch { /* leave _accentCache miss; GetExtractedAccentAsync will retry */ }
+        catch
+        {
+            dominant = DefaultAccent;
+        }
+
+        BakeImperative(surface, bitmap, accent, dominant, pixelSize, isDarkTheme, useImageBackground);
 
         bitmap.Dispose();
 
@@ -417,13 +423,21 @@ public sealed class BakedSurfaceCache : IDisposable
         CompositionDrawingSurface surface,
         CanvasBitmap source,
         Windows.UI.Color accent,
+        Windows.UI.Color dominant,
         SizeInt32 pixelSize,
-        bool isDarkTheme)
+        bool isDarkTheme,
+        bool useImageBackground)
     {
         var w = pixelSize.Width;
         var h = pixelSize.Height;
 
         using var session = CanvasComposition.CreateDrawingSession(surface);
+
+        if (useImageBackground)
+        {
+            BakeImageHero(session, source, accent, dominant, w, h, isDarkTheme);
+            return;
+        }
 
         // 1. Dark base
         session.Clear(Windows.UI.Color.FromArgb(255, 0x1A, 0x14, 0x20));
@@ -535,22 +549,176 @@ public sealed class BakedSurfaceCache : IDisposable
         Windows.UI.Color.FromArgb((byte)Math.Round(Math.Clamp(a, 0f, 1f) * 255f), c.R, c.G, c.B);
 
     /// <summary>
+    /// Mix <paramref name="c"/> toward black by <paramref name="t"/>
+    /// (0 = unchanged, 1 = pure black). Output is fully opaque; alpha
+    /// the consumer wants applied is layered on top via
+    /// <see cref="WithAlpha"/> or <c>FromArgb</c>.
+    /// </summary>
+    private static Windows.UI.Color MixToBlack(Windows.UI.Color c, float t)
+    {
+        t = Math.Clamp(t, 0f, 1f);
+        return Windows.UI.Color.FromArgb(
+            255,
+            (byte)(c.R * (1f - t)),
+            (byte)(c.G * (1f - t)),
+            (byte)(c.B * (1f - t)));
+    }
+
+    /// <summary>
     /// Compute the affine transform that centres the source image inside the
     /// output rect (paper §4.1, "Transform2DEffect placement step"). The
     /// source is scaled UniformToFill — bigger axis is cropped — then
-    /// translated to centre the result.
+    /// translated to centre the result. <paramref name="overscan"/>
+    /// multiplies the scale: 1.45 hides blur halos in the default
+    /// accent-wash bake; 1.0 (no overscan) is right for cases where the
+    /// source is drawn crisp.
     /// </summary>
-    private static Matrix3x2 ComputeCenterTransform(Size source, SizeInt32 outputPx)
+    private static Matrix3x2 ComputeCenterTransform(Size source, SizeInt32 outputPx, float overscan = 1.45f)
     {
         var sw = (float)source.Width;
         var sh = (float)source.Height;
         if (sw <= 0 || sh <= 0) return Matrix3x2.Identity;
         var ow = outputPx.Width;
         var oh = outputPx.Height;
-        var scale = MathF.Max(ow / sw, oh / sh) * 1.45f; // Overscan: hides blur halo at edges
+        var scale = MathF.Max(ow / sw, oh / sh) * overscan;
         var dx = (ow - sw * scale) * 0.5f;
         var dy = (oh - sh * scale) * 0.5f;
         return Matrix3x2.CreateScale(scale) * Matrix3x2.CreateTranslation(dx, dy);
+    }
+
+    /// <summary>
+    /// UniformToFit + right-anchor transform — scale so the entire image
+    /// is visible (no cropping), centre vertically, and translate so the
+    /// image's right edge aligns with the output's right edge. Used by
+    /// the image-as-hero bake, where the carousel's source artwork is
+    /// usually a square podcast cover and a UniformToFill would crop
+    /// heads / subjects when forced into a wide hero slot. With this
+    /// transform the image sits as a clean square on the right side of
+    /// the slide and the left slab gradient covers the rest.
+    /// </summary>
+    private static Matrix3x2 ComputeRightFitTransform(Size source, SizeInt32 outputPx)
+    {
+        var sw = (float)source.Width;
+        var sh = (float)source.Height;
+        if (sw <= 0 || sh <= 0) return Matrix3x2.Identity;
+        var ow = outputPx.Width;
+        var oh = outputPx.Height;
+        var scale = MathF.Min(ow / sw, oh / sh); // Fit, not fill
+        var dx = ow - sw * scale;                 // Right-anchored
+        var dy = (oh - sh * scale) * 0.5f;        // Vertically centred
+        return Matrix3x2.CreateScale(scale) * Matrix3x2.CreateTranslation(dx, dy);
+    }
+
+    /// <summary>
+    /// Image-as-hero bake path: the cover artwork fills the slide
+    /// edge-to-edge, with a left-side darken gradient for text
+    /// legibility that thins out as it travels rightward — the right
+    /// side of the slide shows the image cleanly. Sequenced as: dark
+    /// base, full-bleed image, left darken (heavier at the edge,
+    /// fading toward transparent), noise, vignette.
+    /// </summary>
+    private void BakeImageHero(
+        CanvasDrawingSession session,
+        CanvasBitmap source,
+        Windows.UI.Color accent,
+        Windows.UI.Color dominant,
+        int w, int h,
+        bool isDarkTheme)
+    {
+        // 1. Dark base — only briefly visible behind any margin pixels
+        //    the image doesn't cover (rare with UniformToFill, but safe).
+        session.Clear(Windows.UI.Color.FromArgb(255, 0x1A, 0x14, 0x20));
+
+        // 2. Image, fit-to-height + right-anchored — keeps the entire
+        //    cover visible (no top/bottom crop on square sources) and
+        //    parks it on the right side of the slide where the left
+        //    slab gradient won't cover it. Empty space on the left of
+        //    the image (where the source's aspect can't fill the slide)
+        //    shows the dark base from step 1, which the slab then
+        //    covers solidly anyway.
+        var pixelSize = new SizeInt32 { Width = w, Height = h };
+        using (var transform = new Transform2DEffect
+        {
+            Source = source,
+            TransformMatrix = ComputeRightFitTransform(source.Size, pixelSize),
+            InterpolationMode = CanvasImageInterpolation.HighQualityCubic,
+        })
+        {
+            session.DrawImage(transform);
+        }
+
+        // 3. Left-darken overlay — *solid* dominant-tinted dark for the
+        //    leftmost ~35 % so the title / tagline / CTAs sit on a
+        //    near-opaque panel (matches the Microsoft Store hero rail's
+        //    "Camo Studio" / "Affinity by Canva" layouts where the left
+        //    third is essentially a coloured slab). After 35 % the slab
+        //    fades gradually all the way to ~95 %; the long tail keeps
+        //    enough opacity at the image's left edge (~62 % on a square
+        //    source rendered into a 1200 × 460 slide) to soften the
+        //    transition into hard image pixels — without it the image's
+        //    left edge reads as a discrete line. The dark colour is the
+        //    **image-dominant** accent (same one the CTA buttons tint
+        //    with) mixed 75 % toward black, so the slab feels "of the
+        //    image" rather than reading as pure black. Falls back to
+        //    the seed accent if extraction returned the gray sentinel.
+        var tintSource = dominant != DefaultAccent ? dominant : accent;
+        var darkAccent = MixToBlack(tintSource, 0.75f);
+
+        // Compute the image's actual left-edge position (as a fraction
+        // of slide width) so the slab can hug it. Mirrors
+        // ComputeRightFitTransform: scale = min(w/sw, h/sh), image left
+        // edge = w − sw·scale, then normalised to [0, 1].
+        var sourceSize = source.Size;
+        var sw = (float)sourceSize.Width;
+        var sh = (float)sourceSize.Height;
+        var fitScale = (sw <= 0 || sh <= 0) ? 0f : MathF.Min(w / sw, h / sh);
+        var imageLeftPct = MathF.Max(0f, MathF.Min(1f, 1f - sw * fitScale / w));
+        // Stops anchored to the image edge: solid through the edge
+        // itself (~93 % at edge so the hard line is masked by tint),
+        // then a long fade past the edge to fully transparent at the
+        // slide's right edge.
+        var preEdge   = MathF.Max(0f, imageLeftPct - 0.05f);
+        var midFade   = MathF.Min(1f, imageLeftPct + 0.18f);
+        var lateFade  = MathF.Min(1f, imageLeftPct + 0.32f);
+
+        using (var leftDarken = new CanvasLinearGradientBrush(_device.Value, new[]
+        {
+            new CanvasGradientStop { Position = 0f,           Color = Windows.UI.Color.FromArgb(255, darkAccent.R, darkAccent.G, darkAccent.B) },
+            new CanvasGradientStop { Position = preEdge,      Color = Windows.UI.Color.FromArgb(248, darkAccent.R, darkAccent.G, darkAccent.B) },
+            new CanvasGradientStop { Position = imageLeftPct, Color = Windows.UI.Color.FromArgb(235, darkAccent.R, darkAccent.G, darkAccent.B) },
+            new CanvasGradientStop { Position = midFade,      Color = Windows.UI.Color.FromArgb(120, darkAccent.R, darkAccent.G, darkAccent.B) },
+            new CanvasGradientStop { Position = lateFade,     Color = Windows.UI.Color.FromArgb( 30, darkAccent.R, darkAccent.G, darkAccent.B) },
+            new CanvasGradientStop { Position = 1f,           Color = Windows.UI.Color.FromArgb(  0, darkAccent.R, darkAccent.G, darkAccent.B) },
+        }))
+        {
+            leftDarken.StartPoint = new Vector2(0, h * 0.5f);
+            leftDarken.EndPoint = new Vector2(w, h * 0.5f);
+            session.FillRectangle(0, 0, w, h, leftDarken);
+        }
+
+        // 4. Noise — kills 8-bit banding visible across the smooth
+        //    darken gradient (same shader / range as the default branch).
+        var (noiseMin, noiseMax) = isDarkTheme ? ((byte)0, (byte)255) : ((byte)128, (byte)255);
+        using (var noise = new PixelShaderEffect<NoiseShader>())
+        using (var premulNoise = new PremultiplyEffect { Source = noise })
+        {
+            noise.ConstantBuffer = new NoiseShader((byte)6, noiseMin, noiseMax);
+            session.DrawImage(premulNoise, Vector2.Zero, new Rect(0, 0, w, h));
+        }
+
+        // 5. Soft vignette (same as default branch).
+        using (var vignette = new CanvasRadialGradientBrush(_device.Value, new[]
+        {
+            new CanvasGradientStop { Position = 0.0f, Color = Windows.UI.Color.FromArgb(0, 0, 0, 0) },
+            new CanvasGradientStop { Position = 0.7f, Color = Windows.UI.Color.FromArgb(0, 0, 0, 0) },
+            new CanvasGradientStop { Position = 1.0f, Color = Windows.UI.Color.FromArgb(80, 0, 0, 0) },
+        }))
+        {
+            vignette.Center = new Vector2(w * 0.5f, h * 0.5f);
+            vignette.RadiusX = MathF.Max(w, h) * 0.75f;
+            vignette.RadiusY = MathF.Max(w, h) * 0.75f;
+            session.FillRectangle(0, 0, w, h, vignette);
+        }
     }
 
     public void Dispose()
@@ -572,7 +740,8 @@ public sealed class BakedSurfaceCache : IDisposable
         Uri ImageUri,
         Windows.UI.Color Accent,
         SizeInt32 PixelSize,
-        bool IsDarkTheme);
+        bool IsDarkTheme,
+        bool UseImageBackground);
 
     private sealed class CacheEntry
     {

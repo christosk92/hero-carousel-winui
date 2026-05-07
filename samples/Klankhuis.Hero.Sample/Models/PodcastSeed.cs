@@ -74,12 +74,19 @@ internal static class PodcastSeed
             new HeroCarouselMetadataItem { Label = "16+" },
         };
 
-        // Vandaag Inside — secondary CTA only — the "Learn more" variant
-        // from the Microsoft Store hero rail.
+        // Vandaag Inside — secondary CTA only.
         items[6].SecondaryCtaText = "Watch online";
 
         // Bubbel van Steph & Rijk — primary CTA only.
         items[9].PrimaryCtaText = "Subscribe";
+
+        // Image-as-background mode is the default look for the demo —
+        // every cover fills its slide edge-to-edge with a left-darken
+        // gradient that thins out as it travels right, so the title /
+        // tagline / CTAs stay readable while the image dominates the
+        // visual.
+        foreach (var item in items)
+            item.UseImageAsBackground = true;
 
         return items;
     }
