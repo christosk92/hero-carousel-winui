@@ -112,6 +112,19 @@ public sealed class HeroCarousel : Control
     /// </summary>
     private bool _updatingPips;
 
+    /// <summary>
+    /// Active <see cref="System.Collections.Specialized.INotifyCollectionChanged"/>
+    /// subscription on the bound <see cref="ItemsSource"/>. When the consumer
+    /// passes an <see cref="System.Collections.ObjectModel.ObservableCollection{T}"/>
+    /// (or any <c>INotifyCollectionChanged</c>), the carousel rebuilds slides on
+    /// every Add / Remove / Replace / Reset — matching how a normal items
+    /// control behaves. Plain <see cref="IList{T}"/> consumers pay no overhead;
+    /// no subscription is created. Held as a field so the changed-callback
+    /// can detach from the old list before attaching to the new one and
+    /// <see cref="OnUnloaded"/> can drop the reference at page-end.
+    /// </summary>
+    private System.Collections.Specialized.INotifyCollectionChanged? _itemsSourceSubscription;
+
     public HeroCarousel()
     {
         DefaultStyleKey = typeof(HeroCarousel);
@@ -130,7 +143,45 @@ public sealed class HeroCarousel : Control
     /// </summary>
     public static readonly DependencyProperty ItemsSourceProperty = DependencyProperty.Register(
         nameof(ItemsSource), typeof(IList<HeroCarouselItem>), typeof(HeroCarousel),
-        new PropertyMetadata(null, (d, _) => ((HeroCarousel)d).RebuildSlides()));
+        new PropertyMetadata(null, OnItemsSourceChanged));
+
+    private static void OnItemsSourceChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+        => ((HeroCarousel)d).OnItemsSourceChangedInstance(e.OldValue, e.NewValue);
+
+    private void OnItemsSourceChangedInstance(object? oldValue, object? newValue)
+    {
+        // Detach from the previous list — even if RebuildSlides below is going
+        // to walk the new one, we mustn't keep firing on the stale one.
+        if (_itemsSourceSubscription is not null)
+        {
+            _itemsSourceSubscription.CollectionChanged -= OnItemsSourceCollectionChanged;
+            _itemsSourceSubscription = null;
+        }
+
+        // Subscribe to the new list if it raises collection-change events.
+        // Plain IList<T> consumers (no INotifyCollectionChanged) get the same
+        // behaviour as before: the DP-change above + RebuildSlides below cover
+        // wholesale list replacement; in-place mutation isn't supported on a
+        // non-observable list anyway.
+        if (newValue is System.Collections.Specialized.INotifyCollectionChanged incc)
+        {
+            _itemsSourceSubscription = incc;
+            incc.CollectionChanged += OnItemsSourceCollectionChanged;
+        }
+
+        RebuildSlides();
+    }
+
+    private void OnItemsSourceCollectionChanged(object? sender,
+        System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+    {
+        // Full rebuild on every change. Per-slide composition state (baked
+        // surface, ExpressionAnimations, CTA refs) is keyed by index, so an
+        // Add / Remove / Move / Replace at any position invalidates the
+        // downstream tree. Targeted incremental handlers are possible but not
+        // worth the complexity for the typical 6–12 slide rail.
+        RebuildSlides();
+    }
 
     /// <inheritdoc cref="ItemsSourceProperty"/>
     public IList<HeroCarouselItem>? ItemsSource
@@ -301,6 +352,14 @@ public sealed class HeroCarousel : Control
             // OnLoaded) will overwrite NumberOfPages with the real count.
             SyncPagerToSelection(ItemsSource?.Count ?? 0, SelectedIndex);
         }
+
+        // In some hosts the control can reach Loaded before the template
+        // parts exist. Loaded used to return in that case and never retry,
+        // leaving the template chrome (arrows/pips) visible but without a
+        // composition slide stage. Initialize here as well so whichever
+        // lifecycle event happens second completes the setup.
+        if (IsLoaded)
+            EnsureCompositionInitialized();
     }
 
     private void SyncPagerToSelection(int pageCount, int selectedIndex)
@@ -417,8 +476,12 @@ public sealed class HeroCarousel : Control
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
+        => EnsureCompositionInitialized();
+
+    private void EnsureCompositionInitialized()
     {
-        if (_slideHost is null) return;
+        if (_compositor is not null || _slideHost is null)
+            return;
 
         _compositor = ElementCompositionPreview.GetElementVisual(_slideHost).Compositor;
 
@@ -470,6 +533,11 @@ public sealed class HeroCarousel : Control
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
+        if (_itemsSourceSubscription is not null)
+        {
+            _itemsSourceSubscription.CollectionChanged -= OnItemsSourceCollectionChanged;
+            _itemsSourceSubscription = null;
+        }
         if (_pips is not null)
         {
             _pips.SelectedIndexChanged -= OnPipsSelectedIndexChanged;
