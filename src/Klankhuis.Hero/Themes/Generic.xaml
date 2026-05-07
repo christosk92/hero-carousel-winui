@@ -1,0 +1,231 @@
+<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:Klankhuis.Hero.Controls">
+
+    <!-- ─── PipsPager pip style ───────────────────────────────────────────
+         Both `NormalPipStyle` and `SelectedPipStyle` of the carousel's
+         PipsPager point at this style so the built-in PipsPager doesn't
+         render a separate "selected" visual — the active slide is marked
+         by the page indicator pill (managed in code-behind in a future
+         iteration). For now, the selected pip is implicitly highlighted
+         by the PipsPager's default state-changes; the dot remains white-
+         at-45% per the reference design.
+
+         Ported verbatim from the user's HeroCarousel.Demo reference. -->
+    <Style x:Key="HeroCarouselPipButtonStyle" TargetType="Button">
+        <Setter Property="Width" Value="18" />
+        <Setter Property="Height" Value="18" />
+        <Setter Property="MinWidth" Value="0" />
+        <Setter Property="MinHeight" Value="0" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="UseSystemFocusVisuals" Value="False" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Grid Background="Transparent">
+                        <Border Width="6"
+                                Height="6"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+                                Background="#73FFFFFF"
+                                CornerRadius="3" />
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style TargetType="local:HeroCarousel">
+        <Setter Property="IsTabStop" Value="True" />
+        <Setter Property="UseSystemFocusVisuals" Value="True" />
+        <Setter Property="Foreground" Value="{ThemeResource TextFillColorPrimaryBrush}" />
+        <Setter Property="Background" Value="#0A0810" />
+        <Setter Property="MinHeight" Value="380" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="VerticalContentAlignment" Value="Stretch" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="local:HeroCarousel">
+                    <!-- The outer accent halo is no longer rendered inside
+                         the carousel template. Consumers attach
+                         <c>HeroHalo.Source</c> to a sibling element of
+                         their choice (typically a transparent Border
+                         behind the carousel in the page layout) and that
+                         element hosts the Composition shadow — keeping the
+                         halo's clip chain decoupled from the carousel's
+                         own LayoutClip / MinHeight. -->
+                    <Grid
+                        x:Name="PART_Root"
+                        Background="{TemplateBinding Background}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="12">
+
+                        <!-- Slide host: Composition tree is attached here as ChildVisual.
+                             SpriteVisuals (bg / cover / glow) for every slide live here. -->
+                        <Grid x:Name="PART_SlideHost"
+                              IsHitTestVisible="True"
+                              Background="Transparent" />
+
+                        <!-- Per-slide XAML text overlays — one Border per slide, all
+                             stacked at the same Grid cell. Each Border's hand-out visual
+                             is driven by the *same* expression animations as its
+                             SpriteVisual sibling, so text rides with its slide. -->
+                        <!-- Overlay host: hit-test enabled so per-slide
+                             CTA buttons can receive clicks. The overlay
+                             grid built by OverlayBuilder has no Background,
+                             so empty space falls through to PART_SlideHost
+                             beneath, where the InteractionTracker picks
+                             up pointer drags for scrub. Non-interactive
+                             text/chip elements set IsHitTestVisible=false
+                             explicitly so taps on glyphs also pass through. -->
+                        <Grid x:Name="PART_OverlayHost" />
+
+                        <!-- Nav arrows -->
+                        <Button x:Name="PART_Prev"
+                                Style="{ThemeResource AccentButtonStyle}"
+                                Width="36" Height="36"
+                                CornerRadius="18"
+                                Padding="0"
+                                Margin="12,0,0,0"
+                                Background="#B3141019"
+                                Foreground="White"
+                                HorizontalAlignment="Left"
+                                VerticalAlignment="Center"
+                                AutomationProperties.Name="Previous">
+                            <FontIcon FontFamily="Segoe Fluent Icons" Glyph="&#xE76B;" FontSize="14"/>
+                        </Button>
+                        <Button x:Name="PART_Next"
+                                Width="36" Height="36"
+                                CornerRadius="18"
+                                Padding="0"
+                                Margin="0,0,12,0"
+                                Background="#B3141019"
+                                Foreground="White"
+                                HorizontalAlignment="Right"
+                                VerticalAlignment="Center"
+                                AutomationProperties.Name="Next">
+                            <FontIcon FontFamily="Segoe Fluent Icons" Glyph="&#xE76C;" FontSize="14"/>
+                        </Button>
+
+                        <!-- Page indicator: stock WinUI PipsPager + an
+                             animated white pill overlay. Both pip styles
+                             point at the same translucent dot so the
+                             pager's own selected-state is visually neutral;
+                             the pill (PART_PipIndicator) slides between
+                             pip positions via a CompositeTransform on
+                             every selection change. Pattern ported from
+                             the user's HeroCarousel.Demo reference. -->
+                        <Grid x:Name="PART_PipsHost"
+                              VerticalAlignment="Bottom"
+                              HorizontalAlignment="Center"
+                              Margin="0,0,0,12">
+                            <PipsPager x:Name="PART_Pips"
+                                       HorizontalAlignment="Left"
+                                       VerticalAlignment="Center"
+                                       MaxVisiblePips="12"
+                                       Orientation="Horizontal"
+                                       PreviousButtonVisibility="Collapsed"
+                                       NextButtonVisibility="Collapsed"
+                                       NumberOfPages="1"
+                                       SelectedPageIndex="0"
+                                       NormalPipStyle="{StaticResource HeroCarouselPipButtonStyle}"
+                                       SelectedPipStyle="{StaticResource HeroCarouselPipButtonStyle}" />
+                            <!-- The pill's X position is driven by a
+                                 Composition ExpressionAnimation against
+                                 InteractionTracker.Position.X via the
+                                 Translation property (opted in from code
+                                 via SetIsTranslationEnabled), so it rides
+                                 the tracker in-phase with the slides — no
+                                 catch-up after the SelectedIndex settles. -->
+                            <Border x:Name="PART_PipIndicator"
+                                    Width="18"
+                                    Height="6"
+                                    HorizontalAlignment="Left"
+                                    VerticalAlignment="Center"
+                                    Background="White"
+                                    CornerRadius="3"
+                                    IsHitTestVisible="False"
+                                    Opacity="0" />
+                        </Grid>
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- ─── SideCard ────────────────────────────────────────────────── -->
+    <Style TargetType="local:SideCard">
+        <Setter Property="MinHeight" Value="120" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="VerticalContentAlignment" Value="Stretch" />
+        <Setter Property="Foreground" Value="{ThemeResource TextFillColorPrimaryBrush}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="local:SideCard">
+                    <Grid CornerRadius="8"
+                          BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                          BorderThickness="1"
+                          Background="{ThemeResource SolidBackgroundFillColorTertiaryBrush}">
+                        <Grid.Resources>
+                            <Style x:Key="EyebrowChipStyle" TargetType="Border">
+                                <Setter Property="CornerRadius" Value="4"/>
+                                <Setter Property="Padding" Value="8,4"/>
+                                <Setter Property="HorizontalAlignment" Value="Left"/>
+                                <Setter Property="VerticalAlignment" Value="Top"/>
+                                <Setter Property="Margin" Value="12"/>
+                                <Setter Property="Background" Value="#1AFFFFFF"/>
+                                <Setter Property="BorderBrush" Value="#1FFFFFFF"/>
+                                <Setter Property="BorderThickness" Value="1"/>
+                            </Style>
+                        </Grid.Resources>
+
+                        <!-- Composition root host: gradient wash + cover image with mask -->
+                        <Grid x:Name="PART_CompositionHost"
+                              Background="Transparent"
+                              IsHitTestVisible="False"/>
+
+                        <!-- Bottom darkening for label legibility -->
+                        <Border IsHitTestVisible="False">
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                                    <GradientStop Color="#00000000" Offset="0.0"/>
+                                    <GradientStop Color="#26000000" Offset="0.45"/>
+                                    <GradientStop Color="#C7000000" Offset="1.0"/>
+                                </LinearGradientBrush>
+                            </Border.Background>
+                        </Border>
+
+                        <!-- Eyebrow (always rendered; shows blank when null —
+                             UI is small enough we don't bother with a converter) -->
+                        <Border Style="{StaticResource EyebrowChipStyle}">
+                            <TextBlock Text="{TemplateBinding Eyebrow}"
+                                       FontFamily="Cascadia Mono, Consolas, monospace"
+                                       FontSize="10"
+                                       FontWeight="SemiBold"
+                                       CharacterSpacing="200"
+                                       Foreground="#D9FFFFFF"/>
+                        </Border>
+
+                        <!-- Label -->
+                        <TextBlock Text="{TemplateBinding Label}"
+                                   FontFamily="Segoe UI Variable Display, Segoe UI"
+                                   FontSize="14"
+                                   FontWeight="SemiBold"
+                                   CharacterSpacing="-5"
+                                   Foreground="White"
+                                   HorizontalAlignment="Left"
+                                   VerticalAlignment="Bottom"
+                                   Margin="14,0,14,12"
+                                   TextWrapping="WrapWholeWords"
+                                   MaxLines="2"
+                                   TextTrimming="CharacterEllipsis"/>
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+</ResourceDictionary>

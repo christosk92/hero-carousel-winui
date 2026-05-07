@@ -1,95 +1,167 @@
-# HeroCarousel.WinUI
+# Klankhuis.Hero
 
 ![HeroCarousel demo screenshot](screenshot.png)
 
-`HeroCarousel.WinUI` is a reusable WinUI 3 hero carousel control inspired by the Microsoft Store hero rail. It includes GPU-backed visual effects, shimmer image placeholders, pips, looping navigation, keyboard support, pointer/touch/trackpad gestures, and a demo app that consumes the control as a normal project reference.
+`Klankhuis.Hero` is a reusable WinUI 3 hero carousel control built on Composition + Win2D + ComputeSharp, modelled on the Microsoft Store hero rail. Heavy effects are GPU-baked once per slide; slide motion runs as off-thread `ExpressionAnimation`s keyed off a single `InteractionTracker`, so flicks stay at the compositor's refresh rate even while the UI thread is busy.
 
 ## Projects
 
-- `HeroCarousel/`: reusable control library.
-- `HeroCarousel.Demo/`: packaged WinUI 3 demo app.
+- `src/Klankhuis.Hero/Klankhuis.Hero.csproj` — reusable control library.
+- `samples/Klankhuis.Hero.Sample/Klankhuis.Hero.Sample.csproj` — packaged WinUI 3 demo app.
+
+The solution is `Klankhuis.slnx` at the repository root.
 
 ## Features
 
-- Reusable `HeroCarouselView` control.
-- `ItemsSource` support plus a built-in `HeroCarouselSlide` model.
-- Optional `ContentTemplate` for custom overlay content.
-- Optional `PlaceholderTemplate` for custom loading placeholders.
-- Default shimmer placeholder for every image while loading.
-- Pluggable `IHeroCarouselImageProvider` for `Uri`, `string`, `ImageSource`, or custom async image sources.
-- GPU glow, color wash, and pointer spotlight effects through Win2D and ComputeSharp.
-- Looping navigation with pips and navigation buttons.
-- Touch, trackpad, mouse wheel, pointer drag, and keyboard navigation.
+- `HeroCarousel` — templated `Control` that hosts an arbitrary number of slides.
+- `HeroCarouselItem` — POCO data record (title / tagline / subtitle / source / cover URI / accent / tag).
+- `SideCard` — companion templated control for the side rail (Microsoft-Store-style category tile, accent wash + cover image).
+- `HeroHalo` — attached-property helper that renders an accent-colour ambient halo around any element on the page; tracks the carousel's continuous accent without waiting for the slide to settle.
+- GPU-baked slide backdrops via `Win2D` + `ComputeSharp.D2D1` shaders (NoiseShader for grain, accent radial wash, vignette).
+- Cover artwork loaded asynchronously via `LoadedImageSurface`, masked into rounded shape via `CompositionMaskBrush`, with a `CommunityToolkit.WinUI.Controls.Shimmer` placeholder during load.
+- `InteractionTracker`-driven slide motion with snap-point inertia. Touch, trackpad, mouse wheel, pointer drag, and keyboard (Left / Right) all flow through the same tracker.
+- Animated `PipsPager` page indicator with a sliding accent pill that lerps in lockstep with the tracker.
+- Per-frame accent crossfade (`HeroCarousel.CurrentAccent`) — RGB-lerps between adjacent slides as the user scrubs, no jump on settle.
+- Responsive title typography: title `FontSize` is clamp-scaled to slide width.
+- Autoplay with cancel-on-user-input and configurable interval.
+- Theme-aware (light / dark) noise range, DPI-reactive surface re-bake.
 
 ## Requirements
 
 - Windows App SDK 2.0+
 - WinUI 3
-- `.NET 10.0` Windows target framework
-- Windows 10 1809 or newer, matching the project `TargetPlatformMinVersion`
+- .NET 10 Windows target framework (`net10.0-windows10.0.26100.0`)
+- Windows 10 1809 or newer (matches `TargetPlatformMinVersion`)
+- ARM64 or x64 build platform (the sample is currently configured for ARM64)
 
-## Use The Control
+## Use the control
 
 Reference the library project from a WinUI app:
 
 ```xml
-<ProjectReference Include="..\HeroCarousel\HeroCarousel.csproj" />
+<ProjectReference Include="..\..\src\Klankhuis.Hero\Klankhuis.Hero.csproj" />
 ```
 
-Add the XAML namespace:
+Add the XAML namespace (controls live in `Klankhuis.Hero.Controls`):
 
 ```xml
 <Page
     x:Class="MyApp.MainPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:hero="using:HeroCarousel">
+    xmlns:kh="using:Klankhuis.Hero.Controls">
 
-    <hero:HeroCarouselView ItemsSource="{x:Bind Slides}" />
+    <kh:HeroCarousel x:Name="Hero" />
 </Page>
 ```
 
-Create slides:
+Build slides as `HeroCarouselItem`s and assign to `ItemsSource`:
 
 ```csharp
-using HeroCarousel;
+using Klankhuis.Hero.Controls;
 using Windows.UI;
 
-public IReadOnlyList<HeroCarouselSlide> Slides { get; } =
-[
-    new()
+Hero.ItemsSource = new[]
+{
+    new HeroCarouselItem
     {
-        Image = new Uri("https://picsum.photos/id/1018/2400/1400"),
-        Tag = "Featured",
-        Title = "Alpine Signal",
-        Subtitle = "A reusable hero card with GPU effects.",
-        CtaText = "See details",
-        AccentColor = Color.FromArgb(255, 116, 89, 255),
-        GlowColor = Color.FromArgb(214, 180, 70, 40),
+        Title    = "Sam Solo",
+        Tagline  = "Solo gesprekken, eerlijk en rauw",
+        Subtitle = "Sam Hofman",
+        Source   = "Audio",
+        ImageUri = new Uri("https://example.com/cover.jpg"),
+        Accent   = Color.FromArgb(255, 0xC9, 0xA4, 0x5A),
     },
-];
+    // …
+};
 ```
 
-## Common Options
+### Add an outer halo
 
-- `ItemsSource`: any enumerable item source.
-- `Slides`: compatibility collection for `HeroCarouselSlide` items when `ItemsSource` is not set.
-- `ContentTemplate`: custom content overlay.
-- `PlaceholderTemplate`: custom image placeholder.
-- `ImageProvider`: custom async image resolver.
-- `ImageStretch`: defaults to `UniformToFill`.
-- `IsLoopingEnabled`: defaults to `true`.
-- `IsAutoAdvanceEnabled`: defaults to `false`.
-- `AutoAdvanceInterval`: defaults to `00:00:06`.
-- `PauseAutoAdvanceOnInteraction`: defaults to `true`.
-- `ShowNavigationButtons`: defaults to `true`.
-- `ShowPips`: compatibility boolean, defaults to `true`.
-- `PipsVisibility`: WinUI visibility for the styled `PipsPager`, defaults to `Visible`.
-- `UseGlow`: defaults to `true`.
-- `UseColorWash`: defaults to `true`.
-- `UseSpotlight`: defaults to `true`.
-- `UseButtonReveal`: defaults to `true`.
-- `ImageCacheCapacity`: defaults to `24`.
+`HeroHalo` is an attached-property helper that renders the carousel's current accent as a Composition `DropShadow` on a separate **backdrop** element behind the carousel. The backdrop pattern is required because Composition shadows hosted via `SetElementChildVisual` are bounded by the host element's render slot — to let the halo extend past the carousel, the shadow has to live on a different element whose own slot is large enough.
+
+```xml
+<Grid Padding="48,40,48,80">
+    <!-- Backdrop spans every row, drawn first so it sits behind all
+         page content. Its render slot defines the halo's max extent. -->
+    <Grid x:Name="HaloBackdrop"
+          Grid.RowSpan="3"
+          Background="Transparent"
+          IsHitTestVisible="False" />
+
+    <!-- … your page content … -->
+
+    <kh:HeroCarousel x:Name="Hero" />
+</Grid>
+```
+
+Wire the source in code-behind (`x:Bind` on attached properties is unreliable in WinAppSDK 2.0):
+
+```csharp
+HeroHalo.SetSource(HaloBackdrop, Hero);
+```
+
+`HeroHalo` watches `Hero.CurrentAccent` (per-frame RGB lerp), positions the shadow at `Hero.TransformToVisual(HaloBackdrop)`, and re-syncs on every layout pass. Override defaults with `HeroHalo.SetBlurRadius(...)` / `SetCornerRadius(...)` / `SetIntensity(...)`.
+
+### Side-rail tiles
+
+`SideCard` is the companion Microsoft-Store-style category tile. Same accent + cover URI as the carousel item, plus an `Eyebrow` chip and `Big` flag for the larger top tile.
+
+```xml
+<kh:SideCard x:Name="BigCard"
+             Big="True"
+             Eyebrow="CATEGORIE"
+             Label="Nieuws &amp; politiek" />
+```
+
+```csharp
+BigCard.ImageUri = new Uri("https://example.com/category-cover.jpg");
+BigCard.Accent   = Color.FromArgb(255, 0xD4, 0xA3, 0x73);
+```
+
+## Public API
+
+### `HeroCarousel` (Control)
+
+| Property / event | Type | Default | Notes |
+|---|---|---|---|
+| `ItemsSource` | `IList<HeroCarouselItem>?` | `null` | Setting rebuilds the slide tree. |
+| `SelectedIndex` | `int` | `0` | Updated on tracker idle; setting snaps instantly. |
+| `CurrentAccent` | `Color` | `(0,0,0,0)` | Read-only-from-consumer. RGB-lerped per frame; alpha = 255 once items load. |
+| `Autoplay` | `bool` | `true` | Pauses + restarts on user navigation. |
+| `AutoplayInterval` | `TimeSpan` | `5500 ms` | |
+| `SelectedIndexChanged` | event `TypedEventHandler<HeroCarousel, int>` | — | Fires on tracker idle, not per-frame. |
+
+### `HeroCarouselItem` (POCO)
+
+| Field | Type | Notes |
+|---|---|---|
+| `Title` | `string` | Headline. |
+| `Tagline` | `string` | One-line description. |
+| `Subtitle` | `string` | Author / network — rendered in mono. |
+| `Source` | `string` | Eyebrow chip text (e.g., `"Audio"`). |
+| `ImageUri` | `Uri?` | HTTPS cover artwork. Loaded async + GPU-baked into the backdrop. |
+| `Accent` | `Color` | Drives the radial accent wash + halo + glow. |
+| `Tag` | `object?` | Arbitrary host payload (e.g., a podcast URI). |
+
+### `SideCard` (Control)
+
+| Property | Type | Default | Notes |
+|---|---|---|---|
+| `Big` | `bool` | `false` | Larger top-of-rail variant. |
+| `Label` | `string` | `""` | Primary title. |
+| `Eyebrow` | `string` | `""` | Optional category chip above the label. |
+| `Accent` | `Color` | sky-blue | Drives the diagonal wash + top-left highlight. |
+| `ImageUri` | `Uri?` | `null` | Right-anchored cover image, fades into the wash via a `CompositionMaskBrush`. |
+
+### `HeroHalo` (static class — attached properties)
+
+| Property | Type | Default | Notes |
+|---|---|---|---|
+| `Source` | `HeroCarousel?` | `null` | Setting attaches; `null` detaches and frees Composition resources. |
+| `BlurRadius` | `double` | `120` | Visible halo extent ≈ `1.5 × BlurRadius` before alpha decay. |
+| `CornerRadius` | `double` | `12` | Should match the carousel's frame `CornerRadius`. |
+| `Intensity` | `double` | `0.9` | Halo alpha multiplier (0–1). Raise for accents that match the page bg. |
 
 ## Build
 
@@ -99,7 +171,21 @@ From the repository root:
 $env:DOTNET_CLI_HOME="$PWD\.dotnet-cli"
 $env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE="1"
 $Platform = $env:PROCESSOR_ARCHITECTURE
-dotnet build .\HeroCarousel.slnx -c Debug -p:Platform=$Platform --no-restore
+dotnet build .\Klankhuis.slnx -c Debug -p:Platform=$Platform
 ```
 
-The demo app is MSIX-packaged, so Visual Studio or Windows Developer Mode may be needed for deploy/run workflows.
+Or just build the sample (the library builds transitively):
+
+```powershell
+dotnet build .\samples\Klankhuis.Hero.Sample\Klankhuis.Hero.Sample.csproj -c Debug -p:Platform=ARM64
+```
+
+The sample app is MSIX-packaged, so Visual Studio or Windows Developer Mode is required for deploy/run workflows.
+
+## Architecture notes
+
+- **Bake-once strategy** — every slide's backdrop is rendered once into a `CompositionDrawingSurface` via `CanvasComposition.CreateDrawingSession`. The effect graph (Source → `Transform2DEffect` → `GaussianBlurEffect` → `ExposureEffect` → accent radial wash → diagonal accent linear → procedural noise via `PixelShaderEffect<NoiseShader>` wrapped in `PremultiplyEffect` → vignette) only re-runs on accent / source / theme / DPI / device-lost change. Mirrors the Microsoft Store's pattern from the ComputeSharp paper §4.1.
+- **Off-thread motion** — slide `Offset.X`, content `Scale`, cover scale and z-ordering are all `ExpressionAnimation`s keyed off `InteractionTracker.Position.X`. Snap-to-slide via `InteractionTrackerInertiaRestingValue`.
+- **Cover image** — `LoadedImageSurface` for the bitmap, wrapped in a `CompositionMaskBrush` against a `CompositionVisualSurface`-backed rounded-rect mask so the rounded corners don't clip the drop shadow.
+- **Pip indicator** — `PipsPager` for keyboard-accessible page navigation, plus a separate sliding accent pill driven by an `ExpressionAnimation` on `Translation.X` that lerps in lockstep with the tracker.
+- **Halo** — `HeroHalo`'s `SpriteVisual` is hosted on the consumer's backdrop element via `ElementCompositionPreview.SetElementChildVisual`, sized to the carousel's `ActualSize` and offset via `TransformToVisual(backdrop)`. Re-synced on every `LayoutUpdated` / `SizeChanged`.

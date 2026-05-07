@@ -1,0 +1,183 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="Klankhuis_Hero_Sample.MainPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:kh="using:Klankhuis.Hero.Controls">
+
+    <Grid Padding="48,40,48,80">
+        <!--
+            VSM lives here, on the Page's first-child Grid — AdaptiveTrigger
+            ONLY fires when its VisualStateGroups are attached to the Page's
+            (or Control template's) root element. Nesting it on an inner
+            Grid silently no-ops, which is what the previous attempt did.
+            The Setter targets reach named elements anywhere in the same
+            XAML namescope.
+        -->
+        <VisualStateManager.VisualStateGroups>
+            <VisualStateGroup>
+                <!--
+                    Order matters: when multiple AdaptiveTriggers match,
+                    the LAST listed wins. NarrowState (MinWindowWidth=0)
+                    always matches and is the fallback; WideState (≥1100)
+                    overrides on wide windows.
+                -->
+                <VisualState x:Name="NarrowState">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="0"/>
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <!-- Outer content grid: turn off column 1, open
+                             row 1 so the sidebar can drop below. -->
+                        <Setter Target="ContentRow1.Height" Value="Auto"/>
+                        <Setter Target="ContentCol1.Width" Value="0"/>
+                        <!-- Sidebar moves under the carousel. -->
+                        <Setter Target="Sidebar.(Grid.Row)" Value="1"/>
+                        <Setter Target="Sidebar.(Grid.Column)" Value="0"/>
+                        <Setter Target="Sidebar.Height" Value="220"/>
+                        <!-- Reflow the sidebar internals to a single row
+                             of three side-by-side cards. -->
+                        <Setter Target="SidebarRow0.Height" Value="*"/>
+                        <Setter Target="SidebarRow1.Height" Value="0"/>
+                        <Setter Target="SidebarCol0.Width" Value="2*"/>
+                        <Setter Target="SidebarCol1.Width" Value="*"/>
+                        <Setter Target="BigCard.(Grid.ColumnSpan)" Value="1"/>
+                        <Setter Target="SmallCardsRow.(Grid.Row)" Value="0"/>
+                        <Setter Target="SmallCardsRow.(Grid.Column)" Value="1"/>
+                        <Setter Target="SmallCardsRow.(Grid.ColumnSpan)" Value="1"/>
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="WideState">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="1100"/>
+                    </VisualState.StateTriggers>
+                    <!-- Defaults — no setters needed. -->
+                </VisualState>
+            </VisualStateGroup>
+        </VisualStateManager.VisualStateGroups>
+
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- Halo backdrop: spans every row of the outer page Grid, drawn
+             before all other content so it sits *behind* every element on
+             the page. The halo's render bounds are this element's render
+             slot — i.e., the entire page content area minus the outer
+             padding. HeroHalo renders a SpriteVisual whose Size = Hero's
+             ActualSize and Offset = Hero's position in this backdrop's
+             coordinate space (via TransformToVisual). This is the
+             "backdrop + cast" pattern from the WCT AttachedDropShadow:
+             the only way the shadow can extend past the carousel's own
+             slot is to render it on a separate, larger element. -->
+        <Grid x:Name="HaloBackdrop"
+              Grid.RowSpan="3"
+              Background="Transparent"
+              IsHitTestVisible="False"/>
+
+        <TextBlock Grid.Row="0"
+                   FontFamily="Cascadia Mono, Consolas, monospace"
+                   FontSize="11"
+                   CharacterSpacing="160"
+                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                   Text="// FEATURED · PODCAST CAROUSEL"
+                   Margin="0,0,0,8"/>
+
+        <TextBlock Grid.Row="1"
+                   FontFamily="Segoe UI Variable Display, Segoe UI"
+                   FontSize="32"
+                   FontWeight="SemiBold"
+                   Text="Voor jou geselecteerd"
+                   Margin="0,0,0,24"/>
+
+        <!--
+            Adaptive 2-column layout. At ≥ 1100px window width the sidebar
+            sits to the right of the carousel (Wide state); below that it
+            wraps onto the next row beneath the carousel and reflows its
+            three cards horizontally (Narrow state). The grid keeps both
+            row and column slots defined; only the row/column sizes and
+            children's Grid.Row / Grid.Column attached properties change
+            per state, so no children are added or removed at runtime.
+        -->
+        <Grid Grid.Row="2"
+              x:Name="ContentGrid"
+              MaxWidth="1400"
+              HorizontalAlignment="Stretch"
+              VerticalAlignment="Top">
+            <Grid.RowDefinitions>
+                <RowDefinition x:Name="ContentRow0" Height="Auto"/>
+                <RowDefinition x:Name="ContentRow1" Height="0"/>
+            </Grid.RowDefinitions>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition x:Name="ContentCol0" Width="*" MinWidth="0"/>
+                <ColumnDefinition x:Name="ContentCol1" Width="320"/>
+            </Grid.ColumnDefinitions>
+            <Grid.ColumnSpacing>16</Grid.ColumnSpacing>
+            <Grid.RowSpacing>16</Grid.RowSpacing>
+
+            <!-- The halo is rendered on the outer-Grid-level
+                 `HaloBackdrop` element above, NOT inside ContentGrid.
+                 No MinHeight on the carousel: the control's style already
+                 sets MinHeight=380 in Generic.xaml and a tighter override
+                 here would risk WinUI's auto-LayoutClip on short windows. -->
+            <kh:HeroCarousel Grid.Row="0"
+                             Grid.Column="0"
+                             x:Name="Hero"/>
+
+            <!-- Visible feedback for showcase CTA clicks. The carousel's
+                 own item commands flip IsOpen=True via ShowCtaFeedback in
+                 code-behind. Targeted at the carousel so the tip points
+                 at the slide that was clicked. -->
+            <TeachingTip x:Name="CtaTeachingTip"
+                         Target="{x:Bind Hero}"
+                         PreferredPlacement="Top"
+                         IsLightDismissEnabled="True"
+                         CloseButtonContent="OK"/>
+
+            <Grid Grid.Row="0"
+                  Grid.Column="1"
+                  x:Name="Sidebar"
+                  Height="460">
+                <Grid.RowDefinitions>
+                    <RowDefinition x:Name="SidebarRow0" Height="2*"/>
+                    <RowDefinition x:Name="SidebarRow1" Height="1*"/>
+                </Grid.RowDefinitions>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition x:Name="SidebarCol0" Width="*"/>
+                    <ColumnDefinition x:Name="SidebarCol1" Width="0"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowSpacing>12</Grid.RowSpacing>
+                <Grid.ColumnSpacing>12</Grid.ColumnSpacing>
+
+                <kh:SideCard Grid.Row="0"
+                             Grid.Column="0"
+                             Grid.ColumnSpan="2"
+                             x:Name="BigCard"
+                             Big="True"
+                             Eyebrow="CATEGORIE"
+                             Label="Nieuws &amp; politiek"/>
+
+                <Grid Grid.Row="1"
+                      Grid.Column="0"
+                      Grid.ColumnSpan="2"
+                      x:Name="SmallCardsRow">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.ColumnSpacing>12</Grid.ColumnSpacing>
+
+                    <kh:SideCard Grid.Column="0"
+                                 x:Name="SportCard"
+                                 Label="Sport"/>
+                    <kh:SideCard Grid.Column="1"
+                                 x:Name="ComedyCard"
+                                 Label="Comedy"/>
+                </Grid>
+            </Grid>
+
+        </Grid>
+    </Grid>
+</Page>

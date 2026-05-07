@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "Klankhuis.Hero.Sample (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "Klankhuis.Hero.Sample (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}
