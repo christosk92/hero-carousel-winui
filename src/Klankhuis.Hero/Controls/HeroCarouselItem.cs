@@ -23,6 +23,15 @@ public sealed class HeroCarouselItem
     /// <summary>One-line description shown beneath the title.</summary>
     public string Tagline { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Optional Segoe Fluent Icons glyph rendered directly before
+    /// <see cref="Tagline"/>. Empty hides the icon.
+    /// </summary>
+    public string TaglineIconGlyph { get; set; } = string.Empty;
+
+    /// <summary>Foreground color for <see cref="TaglineIconGlyph"/>.</summary>
+    public Color TaglineIconColor { get; set; } = Color.FromArgb(255, 255, 255, 255);
+
     /// <summary>Author / network / publisher line — rendered in mono text.</summary>
     public string Subtitle { get; set; } = string.Empty;
 

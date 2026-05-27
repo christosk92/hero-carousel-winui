@@ -2,10 +2,14 @@ using System;
 using System.Numerics;
 using Klankhuis.Hero.Theming;
 using Microsoft.UI.Composition;
+using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Hosting;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Windows.Foundation;
+using Windows.System;
 
 namespace Klankhuis.Hero.Controls;
 
@@ -26,15 +30,42 @@ public sealed class SideCard : Control
     private SpriteVisual? _washVisual;
     private SpriteVisual? _highlightVisual;
     private SpriteVisual? _coverVisual;
+    private SpriteVisual? _spotlightVisual;
     private LoadedImageSurface? _coverSurface;
     private Grid? _compositionHost;
+    private bool _isPointerOver;
+    private bool _isPressed;
+
+    /// <summary>
+    /// Raised when the user clicks the card (mouse, touch, or pen) or
+    /// activates it via keyboard (Enter / Space). Standard click semantics:
+    /// fires on PointerReleased only when the release happens while the
+    /// pointer is still over the card.
+    /// </summary>
+    public event TypedEventHandler<SideCard, RoutedEventArgs>? Click;
 
     public SideCard()
     {
         DefaultStyleKey = typeof(SideCard);
+
+        // Interactivity. The composition host inside the template has
+        // IsHitTestVisible="False" so pointer events bubble up to this
+        // Control. Default cursor is Hand to surface the affordance —
+        // SideCard is always clickable when wired up by a consumer.
+        IsTabStop = true;
+        UseSystemFocusVisuals = true;
+        ProtectedCursor = InputSystemCursor.Create(InputSystemCursorShape.Hand);
+
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
         SizeChanged += (_, _) => UpdateCoverSize();
+
+        PointerEntered += OnPointerEntered;
+        PointerExited += OnPointerExited;
+        PointerPressed += OnPointerPressed;
+        PointerReleased += OnPointerReleased;
+        PointerCaptureLost += OnPointerCaptureLost;
+        KeyDown += OnKeyDown;
     }
 
     /// <summary>Large-format card (taller, bigger label). Default false.</summary>
@@ -121,6 +152,27 @@ public sealed class SideCard : Control
         // Layer 2: cover image, right-anchored with left-fade mask
         _coverVisual = _compositor.CreateSpriteVisual();
 
+        // Layer 3: hover spotlight — centered white radial gradient, hidden
+        // at rest (Opacity=0). Fades in on PointerEntered to ~0.22 opacity
+        // and back to 0 on PointerExited. Sits on top of every other layer
+        // so its glow reads over both the cover and the accent wash.
+        _spotlightVisual = _compositor.CreateSpriteVisual();
+        _spotlightVisual.RelativeSizeAdjustment = Vector2.One;
+        _spotlightVisual.Opacity = 0f;
+        var spot = _compositor.CreateRadialGradientBrush();
+        spot.MappingMode = CompositionMappingMode.Relative;
+        spot.EllipseCenter = new Vector2(0.5f, 0.5f);
+        spot.EllipseRadius = new Vector2(0.75f, 0.75f);
+        var ss0 = _compositor.CreateColorGradientStop();
+        ss0.Offset = 0f;
+        ss0.Color = Windows.UI.Color.FromArgb(140, 255, 255, 255);
+        var ss1 = _compositor.CreateColorGradientStop();
+        ss1.Offset = 1f;
+        ss1.Color = Windows.UI.Color.FromArgb(0, 255, 255, 255);
+        spot.ColorStops.Add(ss0);
+        spot.ColorStops.Add(ss1);
+        _spotlightVisual.Brush = spot;
+
         // Stack order, back to front:
         //   1. Cover image (full image, no mask) — bottom layer.
         //   2. Wash — translucent accent overlay on top of the cover,
@@ -129,9 +181,11 @@ public sealed class SideCard : Control
         //      image-bg pattern). Wash is rendered ON TOP of the image,
         //      not below, so its alpha lets the image bleed through.
         //   3. Highlight — small bright top-left spot, optional accent.
+        //   4. Spotlight — centered hover glow, top layer.
         root.Children.InsertAtTop(_coverVisual);
         root.Children.InsertAtTop(_washVisual);
         root.Children.InsertAtTop(_highlightVisual);
+        root.Children.InsertAtTop(_spotlightVisual);
 
         ElementCompositionPreview.SetElementChildVisual(_compositionHost, root);
 
@@ -149,7 +203,102 @@ public sealed class SideCard : Control
         _washVisual = null;
         _highlightVisual = null;
         _coverVisual = null;
+        _spotlightVisual = null;
         _compositor = null;
+        _isPointerOver = false;
+        _isPressed = false;
+    }
+
+    // ─── Interactivity: hover, press, click ──────────────────────────
+
+    private void OnPointerEntered(object sender, PointerRoutedEventArgs e)
+    {
+        _isPointerOver = true;
+        ApplyVisualState();
+    }
+
+    private void OnPointerExited(object sender, PointerRoutedEventArgs e)
+    {
+        _isPointerOver = false;
+        _isPressed = false;
+        ApplyVisualState();
+    }
+
+    private void OnPointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        // Only left mouse button / pen barrel / touch should count as a press;
+        // ignore right-click so the card doesn't visibly "press" during context-menu invocation.
+        var props = e.GetCurrentPoint(this).Properties;
+        if (props.IsRightButtonPressed || props.IsMiddleButtonPressed || props.IsXButton1Pressed || props.IsXButton2Pressed)
+            return;
+
+        _isPressed = true;
+        Focus(FocusState.Pointer);
+        CapturePointer(e.Pointer);
+        ApplyVisualState();
+    }
+
+    private void OnPointerReleased(object sender, PointerRoutedEventArgs e)
+    {
+        var wasPressed = _isPressed;
+        _isPressed = false;
+        if (e.Pointer is not null)
+            ReleasePointerCapture(e.Pointer);
+        ApplyVisualState();
+        if (wasPressed && _isPointerOver)
+            RaiseClick();
+    }
+
+    private void OnPointerCaptureLost(object sender, PointerRoutedEventArgs e)
+    {
+        _isPressed = false;
+        ApplyVisualState();
+    }
+
+    private void OnKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        // Standard Button-like keyboard activation.
+        if (e.Key == VirtualKey.Enter || e.Key == VirtualKey.Space || e.Key == VirtualKey.GamepadA)
+        {
+            e.Handled = true;
+            RaiseClick();
+        }
+    }
+
+    private void RaiseClick()
+    {
+        Click?.Invoke(this, new RoutedEventArgs());
+    }
+
+    /// <summary>
+    /// Drives composition scale + spotlight opacity off the
+    /// <see cref="_isPointerOver"/> and <see cref="_isPressed"/> flags.
+    /// Scales the SideCard's own visual (which includes the templated
+    /// Border chrome + composition gradient stack) so the whole card lifts
+    /// as a unit. Animations use a 160 ms ease-out for hover and 90 ms
+    /// for press so the press feels snappier than the hover settle.
+    /// </summary>
+    private void ApplyVisualState()
+    {
+        if (_compositor is null || _spotlightVisual is null) return;
+
+        var controlVisual = ElementCompositionPreview.GetElementVisual(this);
+        controlVisual.CenterPoint = new Vector3((float)ActualWidth * 0.5f, (float)ActualHeight * 0.5f, 0f);
+
+        float scaleTarget = _isPressed ? 0.985f : (_isPointerOver ? 1.03f : 1.0f);
+        float spotlightTarget = _isPointerOver ? (_isPressed ? 0.12f : 0.22f) : 0f;
+        var scaleDuration = TimeSpan.FromMilliseconds(_isPressed ? 90 : 160);
+        var spotlightDuration = TimeSpan.FromMilliseconds(_isPointerOver ? 160 : 220);
+
+        var scaleAnim = _compositor.CreateVector3KeyFrameAnimation();
+        scaleAnim.InsertKeyFrame(1f, new Vector3(scaleTarget, scaleTarget, 1f));
+        scaleAnim.Duration = scaleDuration;
+        controlVisual.StartAnimation(nameof(Visual.Scale), scaleAnim);
+
+        var opacityAnim = _compositor.CreateScalarKeyFrameAnimation();
+        opacityAnim.InsertKeyFrame(1f, spotlightTarget);
+        opacityAnim.Duration = spotlightDuration;
+        _spotlightVisual.StartAnimation(nameof(Visual.Opacity), opacityAnim);
     }
 
     private void UpdateWashColors()

@@ -134,7 +134,7 @@ public static class HeroHalo
         // Existing state (if any) belongs to the previous Source.
         // Detach it before swapping in the new one.
         var existing = GetState(target);
-        existing?.Detach();
+        existing?.Dispose();
         SetState(target, null);
 
         if (e.NewValue is HeroCarousel newSource)
@@ -275,7 +275,15 @@ public static class HeroHalo
             _maskGeom = null;
             _maskShape = null;
             _maskSurface = null;
+            _accentToken = 0;
             _attached = false;
+        }
+
+        public void Dispose()
+        {
+            Detach();
+            _target.Loaded -= OnLoaded;
+            _target.Unloaded -= OnUnloaded;
         }
 
         private void OnLayoutUpdated(object? sender, object e) => SyncSizeAndPosition();

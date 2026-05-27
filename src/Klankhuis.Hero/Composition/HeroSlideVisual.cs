@@ -90,12 +90,20 @@ internal sealed class HeroSlideVisual : IDisposable
         Cover = compositor.CreateContainerVisual();
         Cover.RelativeSizeAdjustment = Vector2.One;
 
-        // Sizing: 0.55 of slide height ≈ 253 px on a 460-tall slide, matching
-        // the React `width: min(280px, 100%)` clamp. The glow halo extends
-        // ~36% past the cover for a soft fall-off.
-        const float CoverFraction = 0.55f;
+        // Sizing: 0.35 of slide height ≈ 168 px on a 480-tall slide.
+        // Originally 0.55, but on hosts where the slide grew taller than the
+        // nominal 480 (e.g. HomePage with the Queue panel open, where the
+        // hero card auto-sizes to a square-ish aspect) the cover expanded to
+        // ~385–440 px wide and the glow halo to ~558 px, swallowing most of
+        // the text column. The fixed 32-px padding in OverlayBuilder + the
+        // shimmer's reserved column then left the title with only ~150 px,
+        // which forced char-by-char wrapping at FontSize=44 Black. Smaller
+        // cover gives the title back the room it needs at every slide aspect.
+        // GlowFraction tracks CoverFraction so the soft fall-off stays
+        // proportional rather than absolute.
+        const float CoverFraction = 0.35f;
         const float GlowFraction = CoverFraction * 1.45f;
-        const float CoverGutterRight = 56f;
+        const float CoverGutterRight = 24f;
         const float CornerRadius = 12f;
 
         CoverGlow = compositor.CreateSpriteVisual();
@@ -333,6 +341,21 @@ internal sealed class HeroSlideVisual : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        
+        // Stop all running animations before disposing visuals
+        Root.StopAnimation("Offset.X");
+        Root.StopAnimation("Offset.Z");
+        Background.StopAnimation("Scale");
+        Background.StopAnimation("CenterPoint");
+        BackgroundArt.StopAnimation("Offset.X");
+        Content.StopAnimation("Scale");
+        Content.StopAnimation("CenterPoint");
+        Cover.StopAnimation("Scale");
+        Cover.StopAnimation("CenterPoint");
+        CoverGlow.StopAnimation("Opacity");
+        CoverImage.StopAnimation("Size");
+        CoverImage.StopAnimation("Offset");
+        
         _coverSurface?.Dispose();
         _coverSurface = null;
         ItemPropertySet.Dispose();

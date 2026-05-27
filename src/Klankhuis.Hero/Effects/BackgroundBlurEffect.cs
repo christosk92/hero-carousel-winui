@@ -22,14 +22,14 @@ namespace Klankhuis.Hero.Effects;
 /// </summary>
 public sealed class BackgroundBlurEffect : CanvasEffect
 {
-    private static readonly CanvasEffectNode<Transform2DEffect> CenteredNode = new();
-    private static readonly CanvasEffectNode<GaussianBlurEffect> BlurredNode = new();
-    private static readonly CanvasEffectNode<ColorMatrixEffect> SaturatedNode = new();
-    private static readonly CanvasEffectNode<ColorSourceEffect> AccentNode = new();
-    private static readonly CanvasEffectNode<BlendEffect> AccentBlendNode = new();
-    private static readonly CanvasEffectNode<PixelShaderEffect<NoiseShader>> NoiseNode = new();
-    private static readonly CanvasEffectNode<BlendEffect> NoiseBlendNode = new();
-    private static readonly CanvasEffectNode<BorderEffect> ClampedNode = new();
+    private readonly CanvasEffectNode<Transform2DEffect> CenteredNode = new();
+    private readonly CanvasEffectNode<GaussianBlurEffect> BlurredNode = new();
+    private readonly CanvasEffectNode<ColorMatrixEffect> SaturatedNode = new();
+    private readonly CanvasEffectNode<ColorSourceEffect> AccentNode = new();
+    private readonly CanvasEffectNode<BlendEffect> AccentBlendNode = new();
+    private readonly CanvasEffectNode<PixelShaderEffect<NoiseShader>> NoiseNode = new();
+    private readonly CanvasEffectNode<BlendEffect> NoiseBlendNode = new();
+    private readonly CanvasEffectNode<BorderEffect> ClampedNode = new();
 
     private ICanvasImage? _source;
     private Matrix3x2 _transform = Matrix3x2.Identity;

@@ -112,7 +112,11 @@ public sealed class BakedSurfaceCache : IDisposable
             return null;
         }
 
-        ct.ThrowIfCancellationRequested();
+        if (_disposed || ct.IsCancellationRequested)
+        {
+            bitmap.Dispose();
+            return null;
+        }
 
         // Render to a CompositionDrawingSurface (the bridge type).
         var size = new Size(pixelSize.Width, pixelSize.Height);
@@ -141,18 +145,42 @@ public sealed class BakedSurfaceCache : IDisposable
             dominant = DefaultAccent;
         }
 
-        BakeImperative(surface, bitmap, accent, dominant, pixelSize, isDarkTheme, useImageBackground);
+        try
+        {
+            BakeImperative(surface, bitmap, accent, dominant, pixelSize, isDarkTheme, useImageBackground);
+        }
+        catch
+        {
+            surface.Dispose();
+            throw;
+        }
+        finally
+        {
+            bitmap.Dispose();
+        }
 
-        bitmap.Dispose();
+        if (_disposed || ct.IsCancellationRequested)
+        {
+            surface.Dispose();
+            return null;
+        }
 
         var brush = _compositor.CreateSurfaceBrush(surface);
         brush.Stretch = CompositionStretch.UniformToFill;
 
         lock (_gate)
         {
+            if (_disposed || ct.IsCancellationRequested)
+            {
+                brush.Dispose();
+                surface.Dispose();
+                return null;
+            }
+
             // Re-check (another caller might have raced and won)
             if (_cache.TryGetValue(key, out var raceWinner))
             {
+                brush.Dispose();
                 surface.Dispose();
                 raceWinner.Touched = Environment.TickCount64;
                 return raceWinner.Brush;
@@ -208,6 +236,12 @@ public sealed class BakedSurfaceCache : IDisposable
         catch (OperationCanceledException) { throw; }
         catch { return DefaultAccent; }
 
+        if (_disposed || ct.IsCancellationRequested)
+        {
+            bitmap.Dispose();
+            return DefaultAccent;
+        }
+
         Windows.UI.Color extracted;
         try
         {
@@ -218,9 +252,12 @@ public sealed class BakedSurfaceCache : IDisposable
             bitmap.Dispose();
         }
 
-        lock (_gate)
+        if (!_disposed && !ct.IsCancellationRequested)
         {
-            _accentCache[imageUri] = extracted;
+            lock (_gate)
+            {
+                _accentCache[imageUri] = extracted;
+            }
         }
         return extracted;
     }
@@ -372,6 +409,7 @@ public sealed class BakedSurfaceCache : IDisposable
                 entry.Surface.Dispose();
             }
             _cache.Clear();
+            _accentCache.Clear();
         }
     }
 
@@ -399,6 +437,36 @@ public sealed class BakedSurfaceCache : IDisposable
         {
             entry.Brush.Dispose();
             entry.Surface.Dispose();
+        }
+        
+        // Cap the accent cache at 2x the surface cache max to prevent unbounded growth
+        if (_accentCache.Count > _maxEntries * 2)
+        {
+            EvictAccentCache();
+        }
+    }
+    
+    private void EvictAccentCache()
+    {
+        // Keep only accents for URIs in the current surface cache
+        var cachedUris = new HashSet<Uri>();
+        foreach (var key in _cache.Keys)
+        {
+            cachedUris.Add(key.ImageUri);
+        }
+        
+        var keysToRemove = new List<Uri>();
+        foreach (var uri in _accentCache.Keys)
+        {
+            if (!cachedUris.Contains(uri))
+            {
+                keysToRemove.Add(uri);
+            }
+        }
+        
+        foreach (var uri in keysToRemove)
+        {
+            _accentCache.Remove(uri);
         }
     }
 
@@ -587,35 +655,13 @@ public sealed class BakedSurfaceCache : IDisposable
     }
 
     /// <summary>
-    /// UniformToFit + right-anchor transform — scale so the entire image
-    /// is visible (no cropping), centre vertically, and translate so the
-    /// image's right edge aligns with the output's right edge. Used by
-    /// the image-as-hero bake, where the carousel's source artwork is
-    /// usually a square podcast cover and a UniformToFill would crop
-    /// heads / subjects when forced into a wide hero slot. With this
-    /// transform the image sits as a clean square on the right side of
-    /// the slide and the left slab gradient covers the rest.
-    /// </summary>
-    private static Matrix3x2 ComputeRightFitTransform(Size source, SizeInt32 outputPx)
-    {
-        var sw = (float)source.Width;
-        var sh = (float)source.Height;
-        if (sw <= 0 || sh <= 0) return Matrix3x2.Identity;
-        var ow = outputPx.Width;
-        var oh = outputPx.Height;
-        var scale = MathF.Min(ow / sw, oh / sh); // Fit, not fill
-        var dx = ow - sw * scale;                 // Right-anchored
-        var dy = (oh - sh * scale) * 0.5f;        // Vertically centred
-        return Matrix3x2.CreateScale(scale) * Matrix3x2.CreateTranslation(dx, dy);
-    }
-
-    /// <summary>
     /// Image-as-hero bake path: the cover artwork fills the slide
-    /// edge-to-edge, with a left-side darken gradient for text
-    /// legibility that thins out as it travels rightward — the right
-    /// side of the slide shows the image cleanly. Sequenced as: dark
-    /// base, full-bleed image, left darken (heavier at the edge,
-    /// fading toward transparent), noise, vignette.
+    /// edge-to-edge via UniformToFill (Microsoft Store rail style —
+    /// see the "Mixtape" / "Forza Horizon" heroes where the artwork
+    /// covers 100 % of the card and the title sits on a left-side
+    /// dark gradient). Sequenced as: dark base, full-bleed image,
+    /// left-to-right darken gradient for text legibility, noise,
+    /// vignette.
     /// </summary>
     private void BakeImageHero(
         CanvasDrawingSession session,
@@ -629,66 +675,43 @@ public sealed class BakedSurfaceCache : IDisposable
         //    the image doesn't cover (rare with UniformToFill, but safe).
         session.Clear(Windows.UI.Color.FromArgb(255, 0x1A, 0x14, 0x20));
 
-        // 2. Image, fit-to-height + right-anchored — keeps the entire
-        //    cover visible (no top/bottom crop on square sources) and
-        //    parks it on the right side of the slide where the left
-        //    slab gradient won't cover it. Empty space on the left of
-        //    the image (where the source's aspect can't fill the slide)
-        //    shows the dark base from step 1, which the slab then
-        //    covers solidly anyway.
+        // 2. Image, UniformToFill (crisp, overscan=1 — no blur halo to
+        //    hide here). A square Spotify cover in a wide landscape hero
+        //    scales so its vertical axis fits the slide and its
+        //    horizontal axis overscans, centred, so the subject stays
+        //    visible in the middle of the slide. In a 1:1 slot the
+        //    transform reduces to identity-scaled, no crop.
         var pixelSize = new SizeInt32 { Width = w, Height = h };
         using (var transform = new Transform2DEffect
         {
             Source = source,
-            TransformMatrix = ComputeRightFitTransform(source.Size, pixelSize),
+            TransformMatrix = ComputeCenterTransform(source.Size, pixelSize, overscan: 1.0f),
             InterpolationMode = CanvasImageInterpolation.HighQualityCubic,
         })
         {
             session.DrawImage(transform);
         }
 
-        // 3. Left-darken overlay — *solid* dominant-tinted dark for the
-        //    leftmost ~35 % so the title / tagline / CTAs sit on a
-        //    near-opaque panel (matches the Microsoft Store hero rail's
-        //    "Camo Studio" / "Affinity by Canva" layouts where the left
-        //    third is essentially a coloured slab). After 35 % the slab
-        //    fades gradually all the way to ~95 %; the long tail keeps
-        //    enough opacity at the image's left edge (~62 % on a square
-        //    source rendered into a 1200 × 460 slide) to soften the
-        //    transition into hard image pixels — without it the image's
-        //    left edge reads as a discrete line. The dark colour is the
-        //    **image-dominant** accent (same one the CTA buttons tint
-        //    with) mixed 75 % toward black, so the slab feels "of the
-        //    image" rather than reading as pure black. Falls back to
-        //    the seed accent if extraction returned the gray sentinel.
+        // 3. Left-darken overlay — dominant-tinted dark slab anchored
+        //    to the left, fading to transparent across the slide. Solid
+        //    through the left ~18 % so the eyebrow / title / CTAs sit
+        //    on a near-opaque panel; a long mid fade to nothing at the
+        //    right edge lets the rightmost portion of the cover show
+        //    cleanly. The dark colour is the **image-dominant** accent
+        //    (same one the CTA buttons tint with) mixed 75 % toward
+        //    black, so the slab feels "of the image" rather than pure
+        //    black; falls back to the seed accent if extraction
+        //    returned the gray sentinel.
         var tintSource = dominant != DefaultAccent ? dominant : accent;
         var darkAccent = MixToBlack(tintSource, 0.75f);
 
-        // Compute the image's actual left-edge position (as a fraction
-        // of slide width) so the slab can hug it. Mirrors
-        // ComputeRightFitTransform: scale = min(w/sw, h/sh), image left
-        // edge = w − sw·scale, then normalised to [0, 1].
-        var sourceSize = source.Size;
-        var sw = (float)sourceSize.Width;
-        var sh = (float)sourceSize.Height;
-        var fitScale = (sw <= 0 || sh <= 0) ? 0f : MathF.Min(w / sw, h / sh);
-        var imageLeftPct = MathF.Max(0f, MathF.Min(1f, 1f - sw * fitScale / w));
-        // Stops anchored to the image edge: solid through the edge
-        // itself (~93 % at edge so the hard line is masked by tint),
-        // then a long fade past the edge to fully transparent at the
-        // slide's right edge.
-        var preEdge   = MathF.Max(0f, imageLeftPct - 0.05f);
-        var midFade   = MathF.Min(1f, imageLeftPct + 0.18f);
-        var lateFade  = MathF.Min(1f, imageLeftPct + 0.32f);
-
         using (var leftDarken = new CanvasLinearGradientBrush(_device.Value, new[]
         {
-            new CanvasGradientStop { Position = 0f,           Color = Windows.UI.Color.FromArgb(255, darkAccent.R, darkAccent.G, darkAccent.B) },
-            new CanvasGradientStop { Position = preEdge,      Color = Windows.UI.Color.FromArgb(248, darkAccent.R, darkAccent.G, darkAccent.B) },
-            new CanvasGradientStop { Position = imageLeftPct, Color = Windows.UI.Color.FromArgb(235, darkAccent.R, darkAccent.G, darkAccent.B) },
-            new CanvasGradientStop { Position = midFade,      Color = Windows.UI.Color.FromArgb(120, darkAccent.R, darkAccent.G, darkAccent.B) },
-            new CanvasGradientStop { Position = lateFade,     Color = Windows.UI.Color.FromArgb( 30, darkAccent.R, darkAccent.G, darkAccent.B) },
-            new CanvasGradientStop { Position = 1f,           Color = Windows.UI.Color.FromArgb(  0, darkAccent.R, darkAccent.G, darkAccent.B) },
+            new CanvasGradientStop { Position = 0.00f, Color = WithAlpha(darkAccent, 0.95f) },
+            new CanvasGradientStop { Position = 0.18f, Color = WithAlpha(darkAccent, 0.85f) },
+            new CanvasGradientStop { Position = 0.40f, Color = WithAlpha(darkAccent, 0.45f) },
+            new CanvasGradientStop { Position = 0.70f, Color = WithAlpha(darkAccent, 0.10f) },
+            new CanvasGradientStop { Position = 1.00f, Color = WithAlpha(darkAccent, 0.00f) },
         }))
         {
             leftDarken.StartPoint = new Vector2(0, h * 0.5f);

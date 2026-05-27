@@ -131,7 +131,7 @@ public sealed class HeroCarousel : Control
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
         SizeChanged += OnSizeChanged;
-        ActualThemeChanged += (_, _) => InvalidateBackdrops();
+        ActualThemeChanged += OnActualThemeChanged;
     }
 
     // ─── Public DPs ──────────────────────────────────────────────────────
@@ -150,26 +150,37 @@ public sealed class HeroCarousel : Control
 
     private void OnItemsSourceChangedInstance(object? oldValue, object? newValue)
     {
-        // Detach from the previous list — even if RebuildSlides below is going
-        // to walk the new one, we mustn't keep firing on the stale one.
-        if (_itemsSourceSubscription is not null)
-        {
-            _itemsSourceSubscription.CollectionChanged -= OnItemsSourceCollectionChanged;
-            _itemsSourceSubscription = null;
-        }
+        DetachItemsSourceSubscription();
 
         // Subscribe to the new list if it raises collection-change events.
         // Plain IList<T> consumers (no INotifyCollectionChanged) get the same
         // behaviour as before: the DP-change above + RebuildSlides below cover
         // wholesale list replacement; in-place mutation isn't supported on a
         // non-observable list anyway.
-        if (newValue is System.Collections.Specialized.INotifyCollectionChanged incc)
-        {
-            _itemsSourceSubscription = incc;
-            incc.CollectionChanged += OnItemsSourceCollectionChanged;
-        }
+        if (_compositor is not null)
+            AttachItemsSourceSubscription(newValue);
 
         RebuildSlides();
+    }
+
+    private void AttachItemsSourceSubscription(object? source)
+    {
+        if (_itemsSourceSubscription is not null ||
+            source is not System.Collections.Specialized.INotifyCollectionChanged incc)
+        {
+            return;
+        }
+
+        _itemsSourceSubscription = incc;
+        incc.CollectionChanged += OnItemsSourceCollectionChanged;
+    }
+
+    private void DetachItemsSourceSubscription()
+    {
+        if (_itemsSourceSubscription is null) return;
+
+        _itemsSourceSubscription.CollectionChanged -= OnItemsSourceCollectionChanged;
+        _itemsSourceSubscription = null;
     }
 
     private void OnItemsSourceCollectionChanged(object? sender,
@@ -504,6 +515,7 @@ public sealed class HeroCarousel : Control
         _interaction.PositionChanged += OnInteractionPositionChanged;
 
         _surfaceCache = new BakedSurfaceCache(_compositor);
+        AttachItemsSourceSubscription(ItemsSource);
 
         RebuildSlides();
         UpdateAutoplay();
@@ -531,29 +543,52 @@ public sealed class HeroCarousel : Control
         }
     }
 
+    private void OnActualThemeChanged(FrameworkElement sender, object args)
+        => InvalidateBackdrops();
+
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
-        if (_itemsSourceSubscription is not null)
+        // Unsubscribe from all event handlers
+        DetachItemsSourceSubscription();
+        
+        if (_slideHost is not null)
         {
-            _itemsSourceSubscription.CollectionChanged -= OnItemsSourceCollectionChanged;
-            _itemsSourceSubscription = null;
+            _slideHost.SizeChanged -= OnSlideHostSizeChanged;
+            _slideHost.PointerPressed -= OnHostPointerPressed;
+            _slideHost.PointerWheelChanged -= OnHostPointerWheel;
+            _slideHost.KeyDown -= OnHostKeyDown;
         }
+        
         if (_pips is not null)
         {
             _pips.SelectedIndexChanged -= OnPipsSelectedIndexChanged;
         }
+        
+        ActualThemeChanged -= OnActualThemeChanged;
+        
         // Composition cleans up the animation when the visual is GC'd, but
         // we need to re-wire it on a future Loaded — `_interaction` is
         // about to be disposed below.
         _pipExpressionWired = false;
+        
+        // DispatcherTimer doesn't implement IDisposable; Stop() detaches the
+        // tick callback and lets GC reclaim the timer once we drop the ref.
         _autoplayTimer?.Stop();
         _autoplayTimer = null;
+        
         _bakeCts?.Cancel();
         _bakeCts?.Dispose();
         _bakeCts = null;
 
+        // Dispose composition resources
         foreach (var slide in _slides) slide.Dispose();
         _slides.Clear();
+        _stageRoot?.Children.RemoveAll();
+        _overlayHost?.Children.Clear();
+        _overlays.Clear();
+        _titleBlocks.Clear();
+        _ctaButtons.Clear();
+        _slideAccents = null;
 
         if (_interaction is not null)
         {
@@ -572,6 +607,7 @@ public sealed class HeroCarousel : Control
         _stageRoot = null;
         _compositor = null;
     }
+
 
     private void OnSizeChanged(object sender, SizeChangedEventArgs e)
     {
@@ -596,18 +632,32 @@ public sealed class HeroCarousel : Control
     }
 
     /// <summary>
-    /// Scales the title <see cref="TextBlock.FontSize"/> across every
-    /// overlay so titles track the carousel's actual width — CSS
-    /// <c>clamp(28px, 5vw, 50px)</c>. Called from
+    /// Scales the title <see cref="TextBlock.FontSize"/> (and the matching
+    /// <see cref="TextBlock.LineHeight"/>) across every overlay so titles
+    /// track the carousel's actual width — CSS
+    /// <c>clamp(22px, 5vw, 64px)</c>. The previous formula
+    /// <c>clamp(28, 5.5vw, 76)</c> was tuned for the wide-rail variant of
+    /// the carousel where 80-px headlines read fine; consumers now host
+    /// the same control as a 1:1 square (~480 px wide on the Wavee home
+    /// hero), where the floor was kicking in and the title felt
+    /// disproportionate to the cover behind it. Floor down to 22 px so the
+    /// square card has room for the subtitle / CTA stack without crowding;
+    /// ceiling drops from 76 → 64 so the wide-rail layout still scales
+    /// proportionally but doesn't shout. Line height tracks at ~1.08 ×
+    /// font so leading stays consistent at every step. Called from
     /// <see cref="UpdateStepFromHostSize"/> so it runs on every layout
     /// pass that changes the slide host's width.
     /// </summary>
     private void UpdateResponsiveTypography(float slideWidth)
     {
         if (_titleBlocks.Count == 0) return;
-        var fontSize = Math.Clamp(slideWidth * 0.05, 28.0, 50.0);
+        var fontSize = Math.Clamp(slideWidth * 0.05, 22.0, 64.0);
+        var lineHeight = fontSize * 1.08;
         foreach (var t in _titleBlocks)
+        {
             t.FontSize = fontSize;
+            t.LineHeight = lineHeight;
+        }
     }
 
     // ─── Slide construction ──────────────────────────────────────────────
@@ -1029,13 +1079,57 @@ public sealed class HeroCarousel : Control
 
     private void UpdateAutoplay()
     {
+        // DispatcherTimer doesn't implement IDisposable. Stop() detaches the
+        // tick callback; dropping the reference lets GC reclaim it.
         _autoplayTimer?.Stop();
+        _autoplayTimer = null;
         if (!Autoplay) return;
         _autoplayTimer = new DispatcherTimer { Interval = AutoplayInterval };
-        // Pass restartAutoplay: false so an autoplay-triggered advance
-        // doesn't reset its own countdown (which would just amount to
-        // running the timer with the same interval).
-        _autoplayTimer.Tick += (_, _) => GoToOffset(+1, restartAutoplay: false);
+        // Wrap-aware advance — see AdvanceForAutoplay below. Plain
+        // GoToOffset(+1) would clamp at items.Count - 1 and freeze the
+        // carousel on its last slide forever.
+        _autoplayTimer.Tick += (_, _) => AdvanceForAutoplay();
         _autoplayTimer.Start();
     }
+
+    /// <summary>
+    /// Autoplay-specific advance that loops back to slide 0 from the last
+    /// slide rather than clamping. User-initiated navigation (keyboard,
+    /// wheel, dot click) still clamps via <see cref="GoToOffset"/> so a
+    /// user holding Right can't accidentally wrap. The wrap is an instant
+    /// <c>SnapToIndex(0)</c> rather than an animated <c>GoTo</c> — animating
+    /// from N-1 to 0 would pan the InteractionTracker *backwards* through
+    /// every intermediate slide, which reads as the carousel rewinding.
+    /// </summary>
+    private void AdvanceForAutoplay()
+    {
+        if (_interaction is null) return;
+        var items = ItemsSource;
+        if (items is null || items.Count == 0) return;
+
+        var pivot = _interaction.PendingSlide;
+        if (pivot < items.Count - 1)
+        {
+            GoToOffset(+1, restartAutoplay: false);
+            return;
+        }
+
+        // At the last slide — wrap to slide 0. SnapToIndex skips the GoTo
+        // animation; pivoting an animated GoTo from N-1 to 0 would visibly
+        // rewind the tracker through every intermediate slide.
+        //
+        // After the synchronous snap, mirror what OnSelectedIndexExternallyChanged
+        // does: explicitly update SelectedIndex (so consumers' bindings reflect
+        // the wrap) and resync the pager pip. We don't rely on OnTrackerIdle
+        // here because TryUpdatePosition doesn't always emit a state-transition
+        // tick if the tracker was already Idle.
+        _interaction.SnapToIndex(0);
+        if (SelectedIndex != 0)
+        {
+            SelectedIndex = 0;
+            SelectedIndexChanged?.Invoke(this, 0);
+        }
+        SyncPagerToSelection(items.Count, 0);
+    }
+
 }

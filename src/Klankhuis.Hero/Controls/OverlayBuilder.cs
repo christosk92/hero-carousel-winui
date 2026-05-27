@@ -48,12 +48,19 @@ internal static class OverlayBuilder
         Style? secondaryCtaStyle = null)
     {
         // Two columns: text on the left (* with MinWidth=0 so it can shrink
-        // below content size + MaxWidth=540 so TextBlock measure passes the
-        // wrap constraint to children), cover slot on the right (Auto,
-        // sized by the Shimmer's explicit Width).
+        // below content size + MaxWidth=820 so TextBlock measure passes the
+        // wrap constraint to children — paired with the title's responsive
+        // FontSize clamp(28, 5.5vw, 76) in HeroCarousel.UpdateResponsiveTypography),
+        // cover slot on the right (Auto, sized by the Shimmer's explicit Width).
+        //
+        // Padding was 56,40,56,40 + cover slot 280 wide. On hosts < ≈ 750 px wide
+        // (e.g. HomePage with the right Queue panel open) that left the text
+        // column under ~100 px — narrower than a single Black-weight title
+        // character, so wrapping degenerated to one-char-per-line + ellipsis.
+        // Trimmed horizontal padding to 32 to give the text column ~48 px back.
         var grid = new Grid
         {
-            Padding = new Thickness(56, 40, 56, 40),
+            Padding = new Thickness(32, 40, 32, 40),
             ColumnSpacing = 24,
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalAlignment = VerticalAlignment.Center,
@@ -71,7 +78,7 @@ internal static class OverlayBuilder
         {
             Width = new GridLength(1, GridUnitType.Star),
             MinWidth = 0,
-            MaxWidth = 540,
+            MaxWidth = 820,
         });
         grid.ColumnDefinitions.Add(new ColumnDefinition
         {
@@ -137,18 +144,7 @@ internal static class OverlayBuilder
         // ── Tagline ─────────────────────────────────────────────────────
         if (!string.IsNullOrEmpty(item.Tagline))
         {
-            stack.Children.Add(new TextBlock
-            {
-                Text = item.Tagline,
-                FontFamily = new FontFamily("Segoe UI Variable Text, Segoe UI"),
-                FontSize = 16,
-                Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(219, 255, 255, 255)),
-                TextWrapping = TextWrapping.Wrap,
-                HorizontalAlignment = HorizontalAlignment.Left,
-                MaxLines = 2,
-                TextTrimming = TextTrimming.CharacterEllipsis,
-                IsHitTestVisible = false,
-            });
+            stack.Children.Add(BuildTagline(item));
         }
 
         // ── Subtitle ────────────────────────────────────────────────────
@@ -222,10 +218,18 @@ internal static class OverlayBuilder
         // Cover image Shimmer placeholder — sits in column 1, sized to
         // approximately match the Composition CoverImage. The carousel
         // collapses this on cover-load via its Shimmer fade-out logic.
+        //
+        // Reserved width here is the *layout slot* the title text column
+        // reflows around. Tracks HeroSlideVisual.CoverFraction (0.35) at a
+        // ~480-px slide height — anything larger and the cover grows past
+        // the slot, which is visually fine because the Composition cover is
+        // a square in the right-mid area, not a column. Going much wider
+        // than 160 here would re-introduce the char-by-char title wrap on
+        // narrow hosts.
         var coverShimmer = new Shimmer
         {
-            Width = 280,
-            Height = 280,
+            Width = 160,
+            Height = 160,
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0),
@@ -274,6 +278,50 @@ internal static class OverlayBuilder
                 Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(218, 255, 255, 255)),
             },
         };
+    }
+
+    private static FrameworkElement BuildTagline(HeroCarouselItem item)
+    {
+        var text = new TextBlock
+        {
+            Text = item.Tagline,
+            FontFamily = new FontFamily("Segoe UI Variable Text, Segoe UI"),
+            FontSize = 16,
+            Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(219, 255, 255, 255)),
+            TextWrapping = TextWrapping.Wrap,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            MaxLines = 2,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center,
+            IsHitTestVisible = false,
+        };
+
+        if (string.IsNullOrEmpty(item.TaglineIconGlyph))
+            return text;
+
+        var row = new Grid
+        {
+            ColumnSpacing = 8,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            IsHitTestVisible = false,
+        };
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+        row.Children.Add(new FontIcon
+        {
+            FontFamily = new FontFamily("Segoe Fluent Icons"),
+            Glyph = item.TaglineIconGlyph,
+            FontSize = 14,
+            Foreground = new SolidColorBrush(item.TaglineIconColor),
+            VerticalAlignment = VerticalAlignment.Center,
+            IsHitTestVisible = false,
+        });
+
+        Grid.SetColumn(text, 1);
+        row.Children.Add(text);
+
+        return row;
     }
 
     /// <summary>
@@ -459,6 +507,12 @@ internal static class OverlayBuilder
             Attach();
         }
 
+        void OnUnloaded(object sender, RoutedEventArgs e)
+        {
+            shadowHost.Unloaded -= OnUnloaded;
+            ElementCompositionPreview.SetElementChildVisual(shadowHost, null);
+        }
+
         void Attach()
         {
             var hostVisual = ElementCompositionPreview.GetElementVisual(shadowHost);
@@ -500,6 +554,9 @@ internal static class OverlayBuilder
             shadowVisual.Shadow = shadow;
 
             ElementCompositionPreview.SetElementChildVisual(shadowHost, shadowVisual);
+            
+            // Subscribe to Unload to detach the shadow visual when the element leaves the tree
+            shadowHost.Unloaded += OnUnloaded;
         }
     }
 
