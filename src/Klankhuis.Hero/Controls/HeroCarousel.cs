@@ -42,7 +42,7 @@ namespace Klankhuis.Hero.Controls;
 [TemplatePart(Name = PartNext, Type = typeof(Button))]
 [TemplatePart(Name = PartPips, Type = typeof(PipsPager))]
 [TemplatePart(Name = PartPipIndicator, Type = typeof(Border))]
-public sealed class HeroCarousel : Control
+public sealed partial class HeroCarousel : Control
 {
     private const string PartSlideHost = "PART_SlideHost";
     private const string PartOverlayHost = "PART_OverlayHost";

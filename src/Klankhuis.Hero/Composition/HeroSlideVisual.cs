@@ -18,7 +18,7 @@ namespace Klankhuis.Hero.Composition;
 ///    └─ image (SpriteVisual)
 /// </code>
 /// </summary>
-internal sealed class HeroSlideVisual : IDisposable
+internal sealed partial class HeroSlideVisual : IDisposable
 {
     public ContainerVisual Root { get; }
     public SpriteVisual Background { get; }

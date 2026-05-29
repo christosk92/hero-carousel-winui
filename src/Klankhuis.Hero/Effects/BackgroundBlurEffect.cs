@@ -20,7 +20,7 @@ namespace Klankhuis.Hero.Effects;
 /// <see cref="Surfaces.BakedSurfaceCache"/> into a CompositionDrawingSurface
 /// and is never used as a live brush, mirroring the MS Store's strategy.
 /// </summary>
-public sealed class BackgroundBlurEffect : CanvasEffect
+public sealed partial class BackgroundBlurEffect : CanvasEffect
 {
     private readonly CanvasEffectNode<Transform2DEffect> CenteredNode = new();
     private readonly CanvasEffectNode<GaussianBlurEffect> BlurredNode = new();

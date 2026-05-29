@@ -18,7 +18,7 @@ namespace Klankhuis.Hero.Composition;
 /// that's set on user gestures (drag/wheel/key/dot) — never derived from
 /// velocity, so the z-ordering doesn't flicker as the tween settles.
 /// </remarks>
-internal sealed class HeroInteraction : IInteractionTrackerOwner, IDisposable
+internal sealed partial class HeroInteraction : IInteractionTrackerOwner, IDisposable
 {
     private readonly Compositor _compositor;
     private readonly InteractionTracker _tracker;

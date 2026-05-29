@@ -29,7 +29,7 @@ namespace Klankhuis.Hero.Surfaces;
 /// the visual tree. Resize/DPI/theme/device-lost events all flow through
 /// here to invalidate cache entries.
 /// </remarks>
-public sealed class BakedSurfaceCache : IDisposable
+public sealed partial class BakedSurfaceCache : IDisposable
 {
     private readonly Compositor _compositor;
     private readonly Lazy<CanvasDevice> _device;

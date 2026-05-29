@@ -183,6 +183,27 @@
                             </Style>
                         </Grid.Resources>
 
+                        <!-- Big vs default typography. Defaults below match
+                             the small-card sizing (Label 14 / Eyebrow 10);
+                             the Big state bumps Label to 20 px so the
+                             headline card carries visual weight commensurate
+                             with its taller MinHeight (140) — without
+                             collapsing the typography of the smalls. -->
+                        <VisualStateManager.VisualStateGroups>
+                            <VisualStateGroup x:Name="SizeStates">
+                                <VisualState x:Name="DefaultState"/>
+                                <VisualState x:Name="BigState">
+                                    <VisualState.Setters>
+                                        <Setter Target="PART_Label.FontSize" Value="20"/>
+                                        <Setter Target="PART_Label.LineHeight" Value="24"/>
+                                        <Setter Target="PART_Label.MaxLines" Value="3"/>
+                                        <Setter Target="PART_Label.Margin" Value="16,0,16,14"/>
+                                        <Setter Target="PART_Eyebrow.FontSize" Value="11"/>
+                                    </VisualState.Setters>
+                                </VisualState>
+                            </VisualStateGroup>
+                        </VisualStateManager.VisualStateGroups>
+
                         <!-- Composition root host: gradient wash + cover image with mask -->
                         <Grid x:Name="PART_CompositionHost"
                               Background="Transparent"
@@ -191,7 +212,8 @@
                         <!-- Eyebrow (always rendered; shows blank when null —
                              UI is small enough we don't bother with a converter) -->
                         <Border Style="{StaticResource EyebrowChipStyle}">
-                            <TextBlock Text="{TemplateBinding Eyebrow}"
+                            <TextBlock x:Name="PART_Eyebrow"
+                                       Text="{TemplateBinding Eyebrow}"
                                        FontFamily="Cascadia Mono, Consolas, monospace"
                                        FontSize="10"
                                        FontWeight="SemiBold"
@@ -199,10 +221,16 @@
                                        Foreground="#D9FFFFFF"/>
                         </Border>
 
-                        <!-- Label -->
-                        <TextBlock Text="{TemplateBinding Label}"
+                        <!-- Label. MaxLines=2 / TextTrimming=CharacterEllipsis
+                             handles long titles ("Can This Love Be Translated?
+                             (Soundtrack from the Netflix Series)") gracefully;
+                             the Big state lifts MaxLines to 3 for the headline
+                             card where the extra vertical room is available. -->
+                        <TextBlock x:Name="PART_Label"
+                                   Text="{TemplateBinding Label}"
                                    FontFamily="Segoe UI Variable Display, Segoe UI"
                                    FontSize="14"
+                                   LineHeight="18"
                                    FontWeight="SemiBold"
                                    CharacterSpacing="-5"
                                    Foreground="White"

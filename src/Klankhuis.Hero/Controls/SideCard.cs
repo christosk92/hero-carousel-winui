@@ -22,7 +22,7 @@ namespace Klankhuis.Hero.Controls;
 /// edge via a <see cref="CompositionMaskBrush"/>.
 /// </summary>
 [TemplatePart(Name = PartCompositionHost, Type = typeof(Grid))]
-public sealed class SideCard : Control
+public sealed partial class SideCard : Control
 {
     private const string PartCompositionHost = "PART_CompositionHost";
 
@@ -71,7 +71,12 @@ public sealed class SideCard : Control
     /// <summary>Large-format card (taller, bigger label). Default false.</summary>
     public static readonly DependencyProperty BigProperty = DependencyProperty.Register(
         nameof(Big), typeof(bool), typeof(SideCard),
-        new PropertyMetadata(false, (d, _) => ((SideCard)d).UpdateCoverSize()));
+        new PropertyMetadata(false, (d, _) =>
+        {
+            var card = (SideCard)d;
+            card.UpdateCoverSize();
+            card.ApplySizeState();
+        }));
     public bool Big
     {
         get => (bool)GetValue(BigProperty);
@@ -131,6 +136,16 @@ public sealed class SideCard : Control
     {
         base.OnApplyTemplate();
         _compositionHost = GetTemplateChild(PartCompositionHost) as Grid;
+        ApplySizeState();
+    }
+
+    private void ApplySizeState()
+    {
+        // Generic.xaml's SideCard template defines a VisualStateGroup named
+        // "SizeStates" with "DefaultState" and "BigState"; Big toggles the
+        // Label/Eyebrow font sizes. Call with useTransitions=false so the
+        // size change is instantaneous (no fade between font sizes).
+        VisualStateManager.GoToState(this, Big ? "BigState" : "DefaultState", useTransitions: false);
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)

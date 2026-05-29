@@ -124,17 +124,39 @@ internal static class OverlayBuilder
         }
 
         // ── Title ───────────────────────────────────────────────────────
+        // Length-based scaling. The hero band is height-budgeted (HomePage
+        // caps it at ~420 px), so a fixed 44/3-line title can claim half the
+        // hero on long audiobook / show names like
+        // "Stoicism: How to Use Stoic Philosophy to Find Inner Peace and
+        // Happiness". Three tiers keep short titles dramatic and long titles
+        // legible without re-introducing the char-by-char wrap.
+        var titleLength = item.Title?.Length ?? 0;
+        double titleFontSize;
+        double titleLineHeight;
+        int titleMaxLines;
+        if (titleLength <= 36)
+        {
+            titleFontSize = 44; titleLineHeight = 48; titleMaxLines = 2;
+        }
+        else if (titleLength <= 64)
+        {
+            titleFontSize = 36; titleLineHeight = 40; titleMaxLines = 2;
+        }
+        else
+        {
+            titleFontSize = 30; titleLineHeight = 34; titleMaxLines = 3;
+        }
         var title = new TextBlock
         {
             Text = item.Title,
             FontFamily = new FontFamily("Inter, Segoe UI Variable Text, Segoe UI"),
-            FontSize = 44,
+            FontSize = titleFontSize,
             FontWeight = FontWeights.Black,
-            LineHeight = 48,
+            LineHeight = titleLineHeight,
             CharacterSpacing = -20,
             TextWrapping = TextWrapping.Wrap,
             HorizontalAlignment = HorizontalAlignment.Left,
-            MaxLines = 3,
+            MaxLines = titleMaxLines,
             TextTrimming = TextTrimming.CharacterEllipsis,
             Foreground = new SolidColorBrush(Microsoft.UI.Colors.White),
             IsHitTestVisible = false,
